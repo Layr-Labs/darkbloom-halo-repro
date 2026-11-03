@@ -1,0 +1,37 @@
+[package]
+name = "db-engine"
+description = "Generation engines: ComfyUI adapter (Z-Image-Turbo, Wan 2.1 workflows compiled in; loopback only) and a fake engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-gojson.workspace = true
+db-release.workspace = true
+db-tpmattest.workspace = true
+db-wire.workspace = true
+db-log.workspace = true
+db-tls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+png.workspace = true
+getrandom.workspace = true
+bytes.workspace = true
+# platform_independent: no SIMD, `#![forbid(unsafe_code)]` crate-wide.
+jpeg-decoder = { version = "0.3.2", default-features = false, features = ["platform_independent"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+axum.workspace = true

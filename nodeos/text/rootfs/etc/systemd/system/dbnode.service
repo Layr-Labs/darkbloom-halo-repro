@@ -1,0 +1,41 @@
+[Unit]
+Description=Darkbloom text provider (TPM attestation and sealed jobs)
+After=network-online.target dbnode-engine.service dbnode-boot-health.service
+Requires=dbnode-boot-health.service
+Wants=network-online.target dbnode-engine.service
+
+[Service]
+User=dbnode
+Group=dbnode
+SupplementaryGroups=tss dbjobs
+EnvironmentFile=/usr/share/darkbloom/agent.env
+ExecStart=/usr/lib/darkbloom/dbnode run -tpm /dev/tpmrm0 \
+  -coordinator ${DB_COORDINATOR} -ca-cert /usr/share/darkbloom/coordinator-ca.pem \
+  -token-file /usr/share/darkbloom/pairing-token -engine llama -llama-url http://127.0.0.1:8080 \
+  -text-model-id ${DB_TEXT_MODEL_ID} -text-model /usr/share/darkbloom/models/text/model.gguf \
+  -text-model-sha256 ${DB_TEXT_MODEL_SHA256} -text-workflow /usr/share/darkbloom/text/workflow.json \
+  -text-max-tokens ${DB_TEXT_MAX_TOKENS} -engine-recycle /run/dbnode-control -boot-profile uki
+Restart=always
+RestartSec=5
+LimitCORE=0
+MemoryDenyWriteExecute=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/dbnode-engine /run/dbnode-control
+ProtectHome=yes
+InaccessiblePaths=/run/nodeos/host
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @module @raw-io @reboot @swap @obsolete
+DeviceAllow=/dev/tpmrm0 rw
+DevicePolicy=closed
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

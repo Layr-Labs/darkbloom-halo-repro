@@ -1,0 +1,7 @@
+[Unit]
+Description=Reboot instead of a maintenance shell (the Node OS has no login)
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --force reboot

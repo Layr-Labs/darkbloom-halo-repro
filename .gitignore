@@ -1,0 +1,30 @@
+# Device-unique TPM material (EK certificates carry the chip's PlutonId).
+*.der
+ek/
+# OS noise
+.DS_Store
+__pycache__/
+# PoC demo state (release/enrollment keys, signed manifests, binaries).
+poc-rs/.demo/
+poc-rs/target/
+# Private Halo text POC keys, TLS state, quotes and outputs.
+.halo-e2e/
+# Reproduction inputs and outputs (never source).
+.private/
+config/device.json
+config/boot-cert.*
+artifacts/
+repro-state/
+*.key
+*.nmconnection
+*.efi
+*.erofs
+*.verity
+*.gguf
+*.pcap
+*.pcapng
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+.env

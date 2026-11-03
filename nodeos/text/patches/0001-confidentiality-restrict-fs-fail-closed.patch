@@ -1,0 +1,58 @@
+--- a/src/core/bpf-restrict-fs.c
++++ b/src/core/bpf-restrict-fs.c
+@@ -20,7 +20,9 @@
+ #include "manager.h"
+ #include "mkdir.h"
+ #include "nulstr-util.h"
++#include "proc-cmdline.h"
+ #include "stat-util.h"
++#include "string-util.h"
+ #include "strv.h"
+ 
+ #if BPF_FRAMEWORK
+@@ -95,12 +97,28 @@
+ bool bpf_restrict_fs_supported(bool initialize) {
+         _cleanup_(restrict_fs_bpf_freep) struct restrict_fs_bpf *obj = NULL;
+         static int supported = -1;
++        _cleanup_free_ char *lockdown = NULL;
+         int r;
+ 
+         if (supported >= 0)
+                 return supported;
+         if (!initialize)
+                 return false;
++
++        /* This LSM program reads kernel filesystem objects, which the kernel
++         * rejects when confidentiality lockdown is requested. Keep the signed
++         * boot policy intact and avoid attempting an impossible load. Any unit
++         * that actually asks for RestrictFileSystems= fails closed in
++         * apply_restrict_filesystems() when the map fd is unavailable. */
++        r = proc_cmdline_get_key("lockdown", PROC_CMDLINE_IGNORE_EFI_OPTIONS, &lockdown);
++        if (r < 0) {
++                log_warning_errno(r, "bpf-restrict-fs: Cannot determine kernel lockdown mode: %m");
++                return (supported = false);
++        }
++        if (r > 0 && streq(lockdown, "confidentiality")) {
++                log_info("bpf-restrict-fs: RestrictFileSystems= unavailable under confidentiality lockdown; requested units will fail closed.");
++                return (supported = false);
++        }
+ 
+         if (!cgroup_bpf_supported())
+                 return (supported = false);
+--- a/src/core/exec-invoke.c
++++ b/src/core/exec-invoke.c
+@@ -1692,11 +1692,9 @@
+         if (!exec_context_restrict_filesystems_set(c))
+                 return 0;
+ 
+-        if (p->bpf_restrict_fs_map_fd < 0) {
+-                /* LSM BPF is unsupported or lsm_bpf_setup failed */
+-                log_exec_debug(c, p, "LSM BPF not supported, skipping RestrictFileSystems=");
+-                return 0;
+-        }
++        if (p->bpf_restrict_fs_map_fd < 0)
++                return log_exec_error_errno(c, p, SYNTHETIC_ERRNO(EOPNOTSUPP),
++                                            "RestrictFileSystems= requested but BPF LSM is unavailable: %m");
+ 
+         /* We are in a new binary, so dl-open again */
+         r = dlopen_bpf();

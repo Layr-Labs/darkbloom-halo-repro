@@ -1,0 +1,10 @@
+[Unit]
+Description=Wait for the GPU compute devices (amdgpu loads asynchronously)
+# The engine's device allow-list is resolved when its unit starts, so
+# /dev/kfd and the render node must exist by then.
+After=systemd-udev-trigger.service systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'i=0; until [ -c /dev/kfd ] && [ -c /dev/dri/renderD128 ]; do i=$((i+1)); [ $i -gt 240 ] && exit 1; sleep 0.5; done'

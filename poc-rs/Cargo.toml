@@ -1,0 +1,122 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/log",
+    "crates/gojson",
+    "crates/tpm2",
+    "crates/release",
+    "crates/sealbox",
+    "crates/tpmattest",
+    "crates/simboot",
+    "crates/devca",
+    "crates/tls",
+    "crates/tpmdev",
+    "crates/wire",
+    "crates/engine",
+    "crates/node",
+    "crates/coord",
+    "crates/client",
+    "crates/testenv",
+    "crates/cli",
+    "crates/e2e",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "UNLICENSED"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "allow"
+
+[workspace.lints.clippy]
+# Panicking shortcuts are not allowed in library code paths that handle
+# untrusted input; tests opt back in locally.
+unwrap_used = "warn"
+expect_used = "warn"
+indexing_slicing = "warn"
+panic = "warn"
+
+[workspace.dependencies]
+# Workspace crates
+db-log = { path = "crates/log" }
+db-gojson = { path = "crates/gojson" }
+db-devca = { path = "crates/devca" }
+db-tls = { path = "crates/tls" }
+db-tpm2 = { path = "crates/tpm2" }
+db-release = { path = "crates/release" }
+db-sealbox = { path = "crates/sealbox" }
+db-tpmattest = { path = "crates/tpmattest" }
+db-simboot = { path = "crates/simboot" }
+db-tpmdev = { path = "crates/tpmdev" }
+db-wire = { path = "crates/wire" }
+db-engine = { path = "crates/engine" }
+db-node = { path = "crates/node" }
+db-coord = { path = "crates/coord" }
+db-client = { path = "crates/client" }
+db-testenv = { path = "crates/testenv" }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+hex = "0.4"
+chrono = { version = "0.4", default-features = false, features = ["std", "now"] }
+thiserror = "2"
+
+# Crypto (RustCrypto / dalek, pure Rust)
+hpke = "0.15.1"
+chacha20poly1305 = "0.11"
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
+p256 = { version = "0.14", features = ["ecdsa", "ecdh", "pem", "pkcs8"] }
+p384 = { version = "0.14", features = ["ecdsa", "ecdh", "pem", "pkcs8"] }
+ecdsa = { version = "0.17", features = ["der", "algorithm"] }
+rsa = { version = "0.10.0-rc.19", features = ["sha2"] }
+ed25519-dalek = { version = "3.0", features = ["rand_core", "zeroize"] }
+x509-cert = { version = "0.3.0", features = ["builder", "pem"] }
+der = { version = "0.8", features = ["derive", "oid", "pem", "alloc"] }
+spki = { version = "0.8", features = ["pem", "alloc"] }
+sec1 = { version = "0.8", features = ["pem", "der"] }
+const-oid = "0.10"
+aes = "0.9"
+cfb-mode = "0.9"
+rand = "0.10"
+rand_core = "0.10"
+getrandom = { version = "0.4", features = ["sys_rng"] }
+zeroize = { version = "1.9", features = ["derive"] }
+subtle = "2.6"
+
+# TLS: rustls with the ring provider only. Every TLS-capable crate below is
+# built without a default provider (no aws-lc); configurations are built with
+# db-tls and passed in explicitly.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = { version = "1.12", features = ["std"] }
+tokio-rustls = { version = "0.26", default-features = false }
+webpki-roots = "1"
+
+# Async, HTTP and WebSocket
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util", "fs", "process"] }
+tokio-util = "0.7"
+axum = { version = "0.8", features = ["ws"] }
+# `__rustls-tls`: `Connector::Rustls` with our own ClientConfig, without the
+# bundled-roots features.
+tokio-tungstenite = { version = "0.29", features = ["__rustls-tls"] }
+# `rustls-no-provider`: rustls without aws-lc; clients are always built with
+# a preconfigured (ring) ClientConfig.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+bytes = "1.9"
+
+# Misc
+png = "0.18"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = "symbols"

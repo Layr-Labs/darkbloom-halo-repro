@@ -1,0 +1,35 @@
+[Unit]
+Description=Darkbloom bounded pre-admission boot health census
+Wants=dbnode-gpu.service dbnode-engine.service
+After=systemd-journald.service systemd-udev-trigger.service systemd-modules-load.service dbnode-gpu.service dbnode-engine.service
+Before=dbnode.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+User=root
+Group=dbnode
+UMask=0027
+RuntimeDirectory=darkbloom
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/lib/darkbloom/boot-health-save.sh
+TimeoutStartSec=45
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/darkbloom
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+DevicePolicy=closed
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @module @raw-io @reboot @swap
+StandardOutput=null
+StandardError=null

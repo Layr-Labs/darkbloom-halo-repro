@@ -1,0 +1,20 @@
+[package]
+name = "db-tpmdev"
+description = "Provider-side TPM layer in pure Rust: /dev/tpmrm0 and swtpm transports, EK/AK, credential activation, quotes, NV, simulated boot (dev)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-tpm2.workspace = true
+db-tpmattest.workspace = true
+db-devca.workspace = true
+getrandom.workspace = true
+p256.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true

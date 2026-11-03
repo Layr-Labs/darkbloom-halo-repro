@@ -1,0 +1,22 @@
+[package]
+name = "db-tpm2"
+description = "TPM 2.0 structures: strict, bounds-checked marshaling (no I/O), names, KDFa/KDFe, templates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+sha1.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+rand.workspace = true

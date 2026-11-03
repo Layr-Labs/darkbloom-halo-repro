@@ -1,0 +1,103 @@
+#!/bin/sh
+# Text Node OS initrd, embedded in the signed/PCR-11-measured UKI.
+# The pinned host Btrfs partition stores dm-verity images; its metadata is
+# parsed before verity. This is a PoC limitation, not a production partition design.
+export PATH=/bin:/sbin
+set -eu
+mount -t devtmpfs -o nosuid,mode=0755 devtmpfs /dev
+mount -t proc -o nosuid,nodev,noexec proc /proc
+mount -t sysfs -o nosuid,nodev,noexec sysfs /sys
+mount -t tmpfs -o nosuid,nodev,mode=0755 tmpfs /run
+exec </dev/null >/dev/kmsg 2>&1
+log() { echo "<5>nodeos-text-initrd: $*" >/dev/kmsg; }
+fail() {
+    log "FAILED: $*; rebooting in 15 s"
+    sleep 15
+    reboot -f
+    while :; do sleep 60; done
+}
+read -r CMDLINE </proc/cmdline
+ROOT_IMG= ROOT_TREE= ROOT_HASH= MODELS_IMG= MODELS_TREE= MODELS_HASH= HOST_PARTUUID= HOST_UUID=
+for kv in $CMDLINE; do
+    case "$kv" in
+        nodeos.root=*) ROOT_IMG=${kv#nodeos.root=} ;;
+        nodeos.roottree=*) ROOT_TREE=${kv#nodeos.roottree=} ;;
+        roothash=*) ROOT_HASH=${kv#roothash=} ;;
+        nodeos.models=*) MODELS_IMG=${kv#nodeos.models=} ;;
+        nodeos.modelstree=*) MODELS_TREE=${kv#nodeos.modelstree=} ;;
+        nodeos.modelshash=*) MODELS_HASH=${kv#nodeos.modelshash=} ;;
+        nodeos.host-partuuid=*) HOST_PARTUUID=${kv#nodeos.host-partuuid=} ;;
+        nodeos.host-uuid=*) HOST_UUID=${kv#nodeos.host-uuid=} ;;
+    esac
+done
+hex64() { [ ${#1} -eq 64 ] && [ -z "$(echo "$1" | tr -d '0-9a-f')" ]; }
+uuid() { printf '%s\n' "$1" | grep -Eq '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'; }
+[ -n "$ROOT_IMG" ] && [ -n "$ROOT_TREE" ] || fail "root image paths missing"
+hex64 "$ROOT_HASH" || fail "root hash malformed"
+uuid "$HOST_PARTUUID" && uuid "$HOST_UUID" || fail "host partition/filesystem pins malformed"
+[ -n "$MODELS_IMG" ] && [ -n "$MODELS_TREE" ] && hex64 "$MODELS_HASH" || fail "model image paths/hash missing"
+
+while read -r m; do
+    [ -n "$m" ] || continue
+    if ! insmod "/lib/modules/$m" 2>/dev/null; then
+        name=${m%.ko}; name=$(echo "$name" | tr '-' '_')
+        [ -d "/sys/module/$name" ] || fail "cannot load required module $m"
+    fi
+done </etc/nodeos-modules
+
+# Only inspect kernel metadata for the explicitly signed partition pin. Never
+# probe or mount unrelated disks, and reject cloned/ambiguous GPT identifiers.
+find_partition() {
+    count=0
+    candidate=
+    for b in "$1"/*/uevent; do
+        if grep -qx "PARTUUID=$2" "$b" 2>/dev/null; then
+            count=$((count + 1))
+            node=${b%/uevent}; candidate=${node##*/}
+        fi
+    done
+    [ "$count" -le 1 ] || return 2
+    [ "$count" -eq 1 ] || return 1
+    printf '%s\n' "$candidate"
+}
+HOST=/run/nodeos/host
+mkdir -p "$HOST"
+found= n=0
+while [ -z "$found" ]; do
+    result=0
+    found=$(find_partition /sys/class/block "$HOST_PARTUUID") || result=$?
+    [ "$result" -ne 2 ] || fail "pinned GPT partition is ambiguous"
+    [ -n "$found" ] && break
+    n=$((n + 1)); [ "$n" -gt 60 ] && fail "pinned partition absent or kernel lacks PARTUUID uevents"
+    sleep 0.5
+done
+mount -t btrfs -o ro,rescue=nologreplay,subvolid=5 "/dev/$found" "$HOST" || fail "cannot mount pinned Btrfs host read-only"
+[ -d "/sys/fs/btrfs/$HOST_UUID" ] || fail "host filesystem UUID differs from pin"
+[ -f "$HOST$ROOT_IMG" ] || fail "root image missing from pinned host filesystem"
+log "images on pinned /dev/$found"
+
+export DM_DISABLE_UDEV=1
+mkdir -p /run/cryptsetup
+dmdev() {
+    for b in /sys/block/dm-*; do
+        [ "$(cat "$b/dm/name" 2>/dev/null)" = "$1" ] && echo "/dev/${b##*/}" && return 0
+    done
+    return 1
+}
+veritysetup open "$HOST$ROOT_IMG" nodeos-root "$HOST$ROOT_TREE" "$ROOT_HASH" || fail "root image failed dm-verity"
+ROOTDEV=$(dmdev nodeos-root) || fail "root mapper missing"
+L=/run/nodeos/lower RW=/run/nodeos/rw
+mkdir -p "$L" "$RW" /newroot
+mount -t erofs -o ro "$ROOTDEV" "$L" || fail "cannot mount verified root"
+mount -t tmpfs -o nosuid,nodev,mode=0755 tmpfs "$RW" || fail "cannot mount RAM overlay"
+mkdir -p "$RW/upper" "$RW/work"
+mount -t overlay -o "lowerdir=$L,upperdir=$RW/upper,workdir=$RW/work" overlay /newroot || fail "cannot mount overlay root"
+log "root verified ($ROOT_HASH)"
+veritysetup open "$HOST$MODELS_IMG" nodeos-models "$HOST$MODELS_TREE" "$MODELS_HASH" || fail "model image failed dm-verity"
+MDEV=$(dmdev nodeos-models) || fail "model mapper missing"
+mkdir -p /newroot/usr/share/darkbloom/models
+mount -t erofs -o ro,nodev,nosuid,noexec "$MDEV" /newroot/usr/share/darkbloom/models || fail "cannot mount verified models"
+log "models verified ($MODELS_HASH)"
+[ -x /newroot/sbin/init ] || [ -L /newroot/sbin/init ] || fail "root has no init"
+for m in dev proc sys run; do mount --move "/$m" "/newroot/$m" || fail "cannot move /$m"; done
+exec switch_root /newroot /sbin/init

@@ -1,0 +1,45 @@
+[package]
+name = "db-e2e"
+description = "End-to-end text and attestation tests against swtpm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+db-gojson.workspace = true
+db-log.workspace = true
+db-tpm2.workspace = true
+db-release.workspace = true
+db-sealbox.workspace = true
+db-tpmattest.workspace = true
+db-simboot.workspace = true
+db-devca.workspace = true
+db-tpmdev.workspace = true
+db-testenv.workspace = true
+db-wire.workspace = true
+db-engine.workspace = true
+db-node.workspace = true
+db-coord.workspace = true
+db-client.workspace = true
+db-tls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+sha2.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+zeroize.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+reqwest.workspace = true
+axum.workspace = true
+chrono.workspace = true

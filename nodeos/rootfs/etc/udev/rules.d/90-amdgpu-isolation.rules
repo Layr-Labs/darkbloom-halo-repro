@@ -1,0 +1,2 @@
+# Belt and braces for the module option: isolation on for every amdgpu.
+ACTION=="add|bind", SUBSYSTEM=="pci", DRIVER=="amdgpu", ATTR{enforce_isolation}="1"

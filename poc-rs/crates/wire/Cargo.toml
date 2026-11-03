@@ -1,0 +1,24 @@
+[package]
+name = "db-wire"
+description = "Provider/coordinator/consumer protocol messages (Go wire-compatible JSON) and job metadata validation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-gojson.workspace = true
+db-release.workspace = true
+db-sealbox.workspace = true
+db-tpmattest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+hex.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true

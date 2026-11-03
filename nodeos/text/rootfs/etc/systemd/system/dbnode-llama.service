@@ -1,0 +1,44 @@
+[Unit]
+Description=Darkbloom unprivileged text engine (llama-server, loopback only)
+Requires=dbnode-gpu.service nftables.service
+Wants=network-online.target
+After=dbnode-gpu.service nftables.service network-online.target
+
+[Service]
+User=dbengine
+Group=dbjobs
+SupplementaryGroups=render video
+UMask=0007
+Environment=HOME=/run/dbnode-engine/home TMPDIR=/run/dbnode-engine/tmp
+EnvironmentFile=/usr/share/darkbloom/engine.env
+ExecStartPre=/usr/bin/python3 -I /usr/lib/darkbloom/engine/check-network.py
+ExecStart=/usr/bin/llama-server --host 127.0.0.1 --port 8080 --model /usr/share/darkbloom/models/text/model.gguf --alias ${DB_TEXT_MODEL_ID} --ctx-size ${DB_TEXT_CONTEXT_SIZE} --parallel 1 --n-gpu-layers ${DB_TEXT_GPU_LAYERS} --threads ${DB_TEXT_THREADS} --no-webui --no-cache-prompt --no-cache-idle-slots --cache-ram 0 --log-disable
+# PID 1 kills every descendant before the supervisor acknowledges a new generation.
+KillMode=control-group
+KillSignal=SIGKILL
+SendSIGKILL=yes
+TimeoutStopSec=10
+Restart=no
+IPAddressDeny=any
+IPAddressAllow=localhost
+LimitCORE=0
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/dbnode-engine
+ProtectHome=yes
+InaccessiblePaths=/run/nodeos/host /run/dbnode-control
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+DeviceAllow=/dev/kfd rw
+DeviceAllow=char-drm rw
+DevicePolicy=closed
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @module @raw-io @reboot @swap
+StandardOutput=null
+StandardError=null

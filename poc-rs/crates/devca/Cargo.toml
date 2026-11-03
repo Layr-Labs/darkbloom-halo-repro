@@ -1,0 +1,28 @@
+[package]
+name = "db-devca"
+description = "Development endorsement CA (swtpm stand-in for a TPM vendor): P-384 root/ICA, EK certificates, Go-compatible files"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+x509-cert.workspace = true
+der.workspace = true
+spki.workspace = true
+sec1.workspace = true
+const-oid.workspace = true
+p384.workspace = true
+ecdsa.workspace = true
+sha2.workspace = true
+getrandom.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p256.workspace = true
+tempfile.workspace = true

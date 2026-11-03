@@ -1,0 +1,14 @@
+[package]
+name = "db-log"
+description = "Minimal logger facade (Go log.Logger style: timestamp, prefix, message)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true

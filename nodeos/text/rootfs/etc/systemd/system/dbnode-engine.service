@@ -1,0 +1,40 @@
+[Unit]
+Description=Darkbloom fixed text-engine lifecycle supervisor
+Requires=dbnode-gpu.service
+After=dbnode-gpu.service
+
+[Service]
+Type=notify
+NotifyAccess=all
+TimeoutStartSec=120
+User=root
+Group=dbnode
+UMask=0027
+ExecStart=/usr/lib/darkbloom/engine/run-engine.sh
+Restart=always
+RestartSec=2
+IPAddressDeny=any
+IPAddressAllow=localhost
+LimitCORE=0
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/run/dbnode-control
+ProtectHome=yes
+InaccessiblePaths=/run/nodeos/host /run/dbnode-engine
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+DevicePolicy=closed
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallFilter=~@debug @mount @module @raw-io @reboot @swap
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

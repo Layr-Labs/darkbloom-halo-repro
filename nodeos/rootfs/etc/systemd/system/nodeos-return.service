@@ -1,0 +1,6 @@
+[Unit]
+Description=PoC: return the machine to the owner's OS (one-shot Node OS boot)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl reboot

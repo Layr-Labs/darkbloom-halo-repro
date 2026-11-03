@@ -1,0 +1,32 @@
+[package]
+name = "db-client"
+description = "Consumer: verifies the provider itself over its own nonce, seals jobs, checks receipts, decrypts results"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-gojson.workspace = true
+db-release.workspace = true
+db-sealbox.workspace = true
+db-tpmattest.workspace = true
+db-wire.workspace = true
+db-tls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+getrandom.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+base64.workspace = true
+bytes.workspace = true

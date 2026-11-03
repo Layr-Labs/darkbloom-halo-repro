@@ -1,0 +1,18 @@
+[package]
+name = "db-gojson"
+description = "Go encoding/json compatible serialization (byte-identical output, base64 []byte, time.Time)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+chrono.workspace = true
+zeroize.workspace = true

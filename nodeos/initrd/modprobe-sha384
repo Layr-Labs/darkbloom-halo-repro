@@ -1,0 +1,6 @@
+#!/bin/sh
+# Kernel usermode helper for the sole crypto alias needed before IMA starts.
+# The initrd has no modules.dep or general modprobe; other module requests
+# retain their previous fail-closed behavior.
+[ "$#" -eq 3 ] && [ "$1" = -q ] && [ "$2" = -- ] && [ "$3" = crypto-sha384 ] || exit 1
+exec /bin/insmod /lib/modules/sha512.ko >/dev/null 2>&1

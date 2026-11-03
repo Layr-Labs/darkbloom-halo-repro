@@ -1,0 +1,45 @@
+[package]
+name = "db-tpmattest"
+description = "Verifier: EK chain to pinned AMD roots, MakeCredential, quote checks, TCG event log replay, signed-release policy and trust tiers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-gojson.workspace = true
+db-tpm2.workspace = true
+db-release.workspace = true
+db-sealbox.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+hex.workspace = true
+chrono.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+p256.workspace = true
+p384.workspace = true
+ecdsa.workspace = true
+rsa.workspace = true
+ed25519-dalek.workspace = true
+x509-cert.workspace = true
+der.workspace = true
+spki.workspace = true
+const-oid.workspace = true
+aes.workspace = true
+cfb-mode.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+rand_core.workspace = true
+getrandom.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+db-devca.workspace = true
+rand.workspace = true
+tempfile.workspace = true

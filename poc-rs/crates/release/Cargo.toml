@@ -1,0 +1,30 @@
+[package]
+name = "db-release"
+description = "Signed trust: Node OS release manifests, DSSE, SVN floor/expiry/revocation, RFC 6962 log, PCR prediction, Authenticode"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-gojson.workspace = true
+db-tpm2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+hex.workspace = true
+chrono.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+rand_core.workspace = true
+getrandom.workspace = true
+thiserror.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+tempfile.workspace = true

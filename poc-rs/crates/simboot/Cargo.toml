@@ -1,0 +1,17 @@
+[package]
+name = "db-simboot"
+description = "The Halo's Type #1 boot as TCG events (real Authenticode/initrd/cmdline digests; synthetic firmware events) for swtpm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+db-tpm2.workspace = true
+db-release.workspace = true
+db-tpmattest.workspace = true
+thiserror.workspace = true

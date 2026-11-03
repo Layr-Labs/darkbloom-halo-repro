@@ -1,0 +1,80 @@
+# Text-only sealed Node OS.
+ARG BASE=docker.io/library/debian:trixie
+FROM ${BASE}
+ARG LLAMA_VERSION
+ARG GGML_VERSION
+ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY build/apt/ /etc/apt/sources.list.d/
+COPY build/keyrings/ /usr/share/keyrings/
+RUN test -n "$LLAMA_VERSION" && test -n "$GGML_VERSION" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      systemd systemd-sysv udev kmod dbus network-manager wpasupplicant wireless-regdb \
+      iproute2 nftables ca-certificates tpm-udev cryptsetup-bin curl \
+      "llama.cpp-tools=$LLAMA_VERSION" "libllama0=$LLAMA_VERSION" \
+      "libggml0=$GGML_VERSION" "libggml0-backend-hip=$GGML_VERSION" \
+      firmware-amd-graphics firmware-mediatek \
+ && apt-get clean && rm -rf /var/lib/apt/lists/* \
+ && groupadd --system dbjobs \
+ && (getent group render >/dev/null || groupadd --system render) \
+ && useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --groups tss,dbjobs dbnode \
+ && useradd --system --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin --gid dbjobs --groups render,video dbengine
+
+# AMD PMF opens signed trusted applications through amdtee. The vendor bundles
+# those TA files in amd64-microcode, separately from the graphics firmware.
+ARG MICROCODE_VERSION
+RUN test -n "$MICROCODE_VERSION" \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends "amd64-microcode=$MICROCODE_VERSION" python3-minimal \
+ && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Reviewed source patch: avoid only the unavailable RestrictFileSystems probe
+# under confidentiality lockdown; explicit RestrictFileSystems remains fail-closed.
+ARG SYSTEMD_CORE_SHA256
+ARG SYSTEMD_EXECUTOR_SHA256
+COPY build/systemd/libsystemd-core-257.so /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so
+COPY build/systemd/systemd-executor /usr/lib/systemd/systemd-executor
+RUN test "$(dpkg-query -W -f='${Version}' systemd)" = '257.13-1~deb13u1' \
+ && test "$(dpkg-query -W -f='${Version}' libsystemd-shared)" = '257.13-1~deb13u1' \
+ && printf '%s  /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so\n' "$SYSTEMD_CORE_SHA256" | sha256sum -c - \
+ && printf '%s  /usr/lib/systemd/systemd-executor\n' "$SYSTEMD_EXECUTOR_SHA256" | sha256sum -c - \
+ && chmod 0644 /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so \
+ && chmod 0755 /usr/lib/systemd/systemd-executor \
+ && ldd /usr/lib/systemd/systemd >/tmp/systemd-core-dependencies \
+ && ldd /usr/lib/systemd/systemd-executor >>/tmp/systemd-core-dependencies \
+ && ! grep -q 'not found' /tmp/systemd-core-dependencies \
+ && rm /tmp/systemd-core-dependencies \
+ && /usr/lib/systemd/systemd --version >/dev/null
+
+# Shared hardening and the text provider runtime.
+COPY build/modules/ /usr/lib/modules/
+COPY nodeos/rootfs/ /
+COPY nodeos/text/rootfs/ /
+COPY build/generated/ /
+COPY build/secrets/ /
+COPY build/dbnode /usr/lib/darkbloom/dbnode
+RUN chmod -R go-w /usr/share/darkbloom /usr/lib/darkbloom /etc/systemd /etc/sysctl.d /etc/modprobe.d \
+      /etc/modules-load.d /etc/udev/rules.d /etc/tmpfiles.d /etc/NetworkManager /etc/nftables.conf /etc/hostname \
+ && chmod 0755 /usr/lib/darkbloom/dbnode /usr/lib/darkbloom/engine/run-engine.sh /usr/lib/darkbloom/boot-health-save.sh \
+ && test -x /usr/bin/python3 \
+ && test -x /usr/bin/systemd-notify \
+ && test -r /usr/lib/darkbloom/engine/check-network.py \
+ && chown root:dbnode /usr/share/darkbloom/pairing-token && chmod 0640 /usr/share/darkbloom/pairing-token \
+ && chmod 0600 /etc/NetworkManager/system-connections/*.nmconnection \
+ && sha256sum -c /usr/share/darkbloom/amdtee-firmware.sha256 \
+ && test "$(stat -Lc %a /usr/lib/firmware/amdtee)" = 755 \
+ && for firmware in /usr/lib/firmware/amdtee/*.bin; do \
+      test "$(stat -Lc '%u:%g:%a' "$firmware")" = 0:0:644 || exit 1; done \
+ && mkdir -p /usr/share/darkbloom/models \
+ && systemctl enable dbnode.service dbnode-engine.service NetworkManager.service NetworkManager-wait-online.service \
+      nftables.service nodeos-return.timer \
+ && systemctl mask getty@.service serial-getty@.service autovt@.service console-getty.service \
+      container-getty@.service debug-shell.service systemd-firstboot.service ssh.service sshd.service \
+      ssh.socket nodeos-devlog.service tailscaled.service \
+      apt-daily.timer apt-daily-upgrade.timer dpkg-db-backup.timer \
+      systemd-pcrphase.service systemd-pcrphase-sysinit.service systemd-pcrphase-initrd.service systemd-pcrextend@.service \
+      systemd-tpm2-setup-early.service systemd-tpm2-setup.service \
+      swap.target systemd-hibernate.service systemd-hybrid-sleep.service \
+ && rm -f /var/lib/dbus/machine-id && : >/etc/machine-id \
+ && passwd -l root
