@@ -9,12 +9,9 @@ import stat
 import subprocess
 
 DOMAIN = "darkbloom-text-e2e-bundle/v1"
-CATALOG_DOMAIN = "darkbloom-text-e2e-bundle/v2"
-CATALOG_NAMES = frozenset("out/" + n for n in (
-    "root.erofs", "root.verity", "signed.efi",
+NAMES = frozenset("out/" + n for n in (
+    "root.erofs", "root.verity", "models.erofs", "models.verity", "signed.efi",
     "payload.sha256", "signed.efi.sha256", "install-id"))
-NAMES = CATALOG_NAMES | {"out/models.erofs", "out/models.verity"}
-LAYOUTS = {1: (DOMAIN, NAMES), 2: (CATALOG_DOMAIN, CATALOG_NAMES)}
 ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}\Z")
 MAX_FILE = 100 * 1024**3
 
@@ -38,22 +35,19 @@ def parse_manifest(raw):
     m = json.loads(raw, object_pairs_hook=no_duplicates)
     if not isinstance(m, dict) or set(m) != {"v", "domain", "sequence", "install_id", "files"}:
         raise ValueError("unexpected manifest schema")
-    if type(m["v"]) is not int or m["v"] not in LAYOUTS:
-        raise ValueError("unexpected manifest domain/version")
-    domain, expected_names = LAYOUTS[m["v"]]
-    if m["domain"] != domain:
+    if type(m["v"]) is not int or m["v"] != 1 or m["domain"] != DOMAIN:
         raise ValueError("unexpected manifest domain/version")
     if type(m["sequence"]) is not int or not 1 <= m["sequence"] <= 2**63-1:
         raise ValueError("invalid sequence")
     if not isinstance(m["install_id"], str) or not ID_RE.fullmatch(m["install_id"]):
         raise ValueError("invalid install ID")
-    if not isinstance(m["files"], list) or len(m["files"]) != len(expected_names):
+    if not isinstance(m["files"], list) or len(m["files"]) != len(NAMES):
         raise ValueError("unexpected file set")
     names = []
     for row in m["files"]:
         if not isinstance(row, dict) or set(row) != {"name", "size", "sha256"}:
             raise ValueError("invalid file row")
-        if not isinstance(row["name"], str) or row["name"] not in expected_names:
+        if not isinstance(row["name"], str) or row["name"] not in NAMES:
             raise ValueError("unapproved filename")
         if type(row["size"]) is not int or not 0 < row["size"] <= MAX_FILE:
             raise ValueError("invalid file size")
@@ -62,7 +56,7 @@ def parse_manifest(raw):
         if not isinstance(row["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", row["sha256"]):
             raise ValueError("invalid file digest")
         names.append(row["name"])
-    if names != sorted(expected_names) or raw != canonical(m):
+    if names != sorted(NAMES) or raw != canonical(m):
         raise ValueError("noncanonical manifest or duplicate filename")
     return m
 

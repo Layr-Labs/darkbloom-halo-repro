@@ -11,7 +11,6 @@
 //! dbrelease sign    -key keys/release.key -in manifest.json -out release.dsse.json
 //! dbrelease verify  -pub keys/release.pub -in release.dsse.json
 //! dbrelease inspect-log -in /sys/kernel/security/tpm0/binary_bios_measurements
-//! dbrelease verify-calibration -in quote.json -ak-public pinned-ak.json -nonce HEX -manifest reviewed.json -release-id ID
 //! ```
 
 #![forbid(unsafe_code)]
@@ -36,7 +35,7 @@ fn main() {
     db_tls::install_default_provider();
     let args = cli_args();
     let Some((cmd, rest)) = args.split_first() else {
-        fail("usage: dbrelease keygen|predict|build|sign|verify|inspect-log|verify-calibration [flags]");
+        fail("usage: dbrelease keygen|predict|build|sign|verify|inspect-log [flags]");
     };
     match cmd.as_str() {
         "keygen" => keygen(rest),
@@ -45,41 +44,8 @@ fn main() {
         "sign" => sign(rest),
         "verify" => verify(rest),
         "inspect-log" => inspect_log(rest),
-        "verify-calibration" => verify_calibration(rest),
         other => fail(format!("unknown command {other:?}")),
     }
-}
-
-fn verify_calibration(args: &[String]) {
-    use std::io::{Read as _, Write as _};
-    let mut flags = FlagSet::new("verify-calibration");
-    flags
-        .string("in", "", "offline collect_quote.py JSON capture")
-        .string("ak-public", "", "AK public JSON pinned independently in trusted factory setup")
-        .string("nonce", "", "fresh verifier-generated nonce, 16-32 bytes of hex")
-        .string("manifest", "", "independently reviewed UKI manifest including platform PCR pins")
-        .string("release-id", "", "explicit installed release identifier for the wizard PCR reference");
-    flags.parse_or_exit(args);
-    let read = |name: &str, limit: usize| {
-        let path = flags.str(name);
-        if path.is_empty() {
-            fail(format!("-{name} is required"));
-        }
-        let file = std::fs::File::open(&path).unwrap_or_else(|e| fail(format!("{path}: {e}")));
-        let mut bytes = Vec::new();
-        file.take(limit as u64 + 1).read_to_end(&mut bytes).unwrap_or_else(|e| fail(format!("{path}: {e}")));
-        if bytes.len() > limit {
-            fail(format!("{path}: exceeds {limit} byte limit"));
-        }
-        bytes
-    };
-    let capture = read("in", db_cli::calibration::MAX_CAPTURE_BYTES);
-    let pinned = read("ak-public", 4096);
-    let manifest = read("manifest", 8 << 20);
-    let manifest: Manifest = db_gojson::from_slice(&manifest).unwrap_or_else(|e| fail(format!("reviewed manifest: {e}")));
-    let nonce = hex::decode(flags.str("nonce")).unwrap_or_else(|e| fail(format!("-nonce: {e}")));
-    let canonical = db_cli::calibration::verify(&capture, &pinned, &nonce, &manifest, &flags.str("release-id")).unwrap_or_else(|e| fail(e));
-    std::io::stdout().lock().write_all(&canonical).unwrap_or_else(|e| fail(format!("stdout: {e}")));
 }
 
 fn keygen(args: &[String]) {
@@ -94,8 +60,7 @@ fn keygen(args: &[String]) {
 fn add_boot_flags(fs: &mut FlagSet) {
     fs.string("shim", "/usr/lib/shim/shimx64.efi.signed", "shim EFI binary")
         .string("sdboot", "/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed", "systemd-boot EFI binary")
-        .string("uki", "", "signed single-profile UKI")
-        .boolean("uki-menu", false, "measure shim -> systemd-boot -> UKI for a boot menu entry")
+        .string("uki", "", "signed single-profile UKI (direct shim -> UKI boot)")
         .string("kernel", "", "kernel image (EFI stub PE)")
         .string("initrd", "", "initrd image")
         .string("cmdline", "", "kernel command line (load options) exactly as booted")
@@ -135,12 +100,7 @@ fn compute_boot(fs: &FlagSet) -> BootResult {
         }
         let mut apps = Vec::new();
         let mut digests = Vec::new();
-        let mut boot_chain = vec![("shimx64.efi", fs.str("shim"), None)];
-        if fs.bool("uki-menu") {
-            boot_chain.push(("systemd-bootx64.efi", fs.str("sdboot"), None));
-        }
-        boot_chain.push(("uki", uki, Some(data)));
-        for (name, path, bytes) in boot_chain {
+        for (name, path, bytes) in [("shimx64.efi", fs.str("shim"), None), ("uki", uki, Some(data))] {
             let bytes = bytes.unwrap_or_else(|| std::fs::read(&path).unwrap_or_else(|e| fail(format!("{path}: {e}"))));
             let d = db_release::authenticode_digest(&bytes, HashAlg::Sha256).unwrap_or_else(|e| fail(format!("{path}: {e}")));
             apps.push(Artifact { name: name.to_owned(), sha256: hex::encode(&d), bytes: bytes.len() as i64 });
@@ -161,9 +121,6 @@ fn compute_boot(fs: &FlagSet) -> BootResult {
             uki_sections: Some(section_artifacts),
             path: "uki".to_owned(),
         };
-    }
-    if fs.bool("uki-menu") {
-        fail("-uki-menu requires -uki");
     }
     let mut cmdline = fs.str("cmdline");
     if fs.bool("cmdline-from-proc") {
@@ -209,7 +166,7 @@ fn predict(args: &[String]) {
     println!("initrd sha256         {}", r.pred.initrd_sha256);
     println!("load options sha256   {}", r.pred.load_options_sha256);
     let mut rows = vec![
-        (4, hex::encode(r.pcr4), "boot chain (EFI applications listed above)"),
+        (4, hex::encode(r.pcr4), if r.path == "uki" { "boot chain (shim, UKI)" } else { "boot chain (shim, systemd-boot, kernel)" }),
         (
             9,
             r.pred.pcr9_sha256.clone(),
@@ -254,7 +211,7 @@ fn explicit_flag(args: &[String], name: &str) -> bool {
             return true;
         }
         i += 1;
-        if !inline && !matches!(flag, "cmdline-from-proc" | "require-boot-health" | "uki-menu") {
+        if !inline && !matches!(flag, "cmdline-from-proc" | "require-boot-health") {
             i += 1;
         }
     }
@@ -336,7 +293,6 @@ fn build(args: &[String]) {
         .string("hash-cache", "", "model hash cache")
         .string("text-model-id", "", "text model ID published to consumers")
         .string("text-model", "", "GGUF text model file to stream-hash and pin")
-        .string("text-model-manifest", "", "verified model-package manifest to pair with the GGUF and pin")
         .string("text-workflow", "", "reviewed llama.cpp text workflow JSON to hash and pin")
         .string("runtime-from", "", "operator-reviewed dev UKI manifest supplying only its pinned runtime")
         .boolean("require-boot-health", false, "require a clean bounded pre-admission boot health report")
@@ -357,10 +313,9 @@ fn build(args: &[String]) {
         if fs.str("uki").is_empty() {
             fail("-runtime-from requires -uki so the target boot is independently measured");
         }
-        if let Some(flag) =
-            ["agent", "engine", "models-dir", "hash-cache", "text-model-id", "text-model", "text-model-manifest", "text-workflow"]
-                .into_iter()
-                .find(|name| explicit_flag(args, name))
+        if let Some(flag) = ["agent", "engine", "models-dir", "hash-cache", "text-model-id", "text-model", "text-workflow"]
+            .into_iter()
+            .find(|name| explicit_flag(args, name))
         {
             fail(format!("-runtime-from cannot be combined with -{flag}"));
         }
@@ -438,10 +393,8 @@ fn build(args: &[String]) {
     let models_dir = fs.str("models-dir");
     let text_model_id = fs.str("text-model-id");
     let text_model = fs.str("text-model");
-    let text_model_manifest = fs.str("text-model-manifest");
     let text_workflow = fs.str("text-workflow");
-    let text_requested =
-        !text_model_id.is_empty() || !text_model.is_empty() || !text_workflow.is_empty() || !text_model_manifest.is_empty();
+    let text_requested = !text_model_id.is_empty() || !text_model.is_empty() || !text_workflow.is_empty();
     if text_requested {
         if text_model_id.is_empty() || text_model.is_empty() || text_workflow.is_empty() {
             fail("-text-model-id, -text-model and -text-workflow must be supplied together");
@@ -453,13 +406,8 @@ fn build(args: &[String]) {
             fail("-engine must be llama.cpp for a text model release");
         }
         eprintln!("hashing approved GGUF text model and workflow...");
-        let (workflows, models) = db_engine::llama_release_with_manifest(
-            &text_model_id,
-            Path::new(&text_model),
-            Path::new(&text_workflow),
-            (!text_model_manifest.is_empty()).then(|| Path::new(&text_model_manifest)),
-        )
-        .unwrap_or_else(|e| fail(e));
+        let (workflows, models) =
+            db_engine::llama_release(&text_model_id, Path::new(&text_model), Path::new(&text_workflow)).unwrap_or_else(|e| fail(e));
         m.runtime.engine = Artifact { name: "llama.cpp".to_owned(), ..Artifact::default() };
         m.runtime.workflows = Some(workflows);
         m.runtime.models = Some(models);
@@ -472,15 +420,6 @@ fn build(args: &[String]) {
         let (wfs, models) = db_engine::comfy_release(&dirs, cache.as_deref()).unwrap_or_else(|e| fail(e));
         m.runtime.workflows = (!wfs.is_empty()).then_some(wfs);
         m.runtime.models = (!models.is_empty()).then_some(models);
-    }
-    if m.boot.load_options.split_whitespace().any(|field| field == "nodeos.model-mode=catalog") {
-        complete_runtime(&m.runtime).unwrap_or_else(|e| fail(e));
-        let models = m.runtime.models();
-        if models.len() != 1 || !models.first().is_some_and(|model| model.files().iter().any(|file| file.name == "manifest.json")) {
-            fail(
-                "catalog mode requires exactly one model and its manifest.json pin; use -text-model-manifest or a complete -runtime-from template",
-            );
-        }
     }
     if let Err(e) = m.validate() {
         fail(e);

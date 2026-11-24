@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """Have the Pluton TPM sign a fresh boot-state quote.
 
-    sudo python3 collect_quote.py <nonce-hex> > quote.json
+    sudo /usr/local/sbin/darkbloom-text-e2e-control quote <64hex> > quote.json
 
 Creates a transient restricted ECC P-256 signing key (an attestation key, AK)
 under the endorsement hierarchy, reads the quoted SHA-256 PCRs, asks the TPM to
 quote them over the verifier's nonce, and prints JSON with the AK public
 area, the signed attestation structure, the signature, the PCR values and the
 boot event log. Nothing persists: the key is flushed before exit.
-The Wi-Fi-only calibration path accepts --calibration <nonce-hex> to include
-PCR 11, and --calibration-key to pin this TPM's public key from factory Linux.
+This command collects a diagnostic snapshot. The coordinator and client in
+RUNBOOK.md verify the serving appliance off the device.
 
 The endorsement hierarchy matters: TPM 2.0 obfuscates resetCount,
 restartCount and firmwareVersion in quotes signed by keys outside the
@@ -30,8 +30,6 @@ ALG_ECC, ALG_SHA256, ALG_NULL, ALG_ECDSA, ECC_NIST_P256 = 0x0023, 0x000B, 0x0010
 # fixedTPM | fixedParent | sensitiveDataOrigin | userWithAuth | noDA | restricted | sign
 AK_ATTRIBUTES = 0x2 | 0x10 | 0x20 | 0x40 | 0x400 | 0x10000 | 0x40000
 QUOTED_PCRS = [0, 1, 2, 3, 4, 5, 6, 7, 9, 12, 14]
-CALIBRATION_PCRS = [0, 1, 2, 3, 4, 5, 6, 7, 9, 11, 12, 14]
-MAX_EVENT_LOG = 160 * 1024
 PASSWORD_SESSION = struct.pack(">IHBH", RS_PW, 0, 0, 0)
 
 
@@ -96,9 +94,9 @@ class Tpm:
             remaining = [pcr for pcr in remaining if pcr not in values]
         return values
 
-    def quote(self, handle, nonce, pcrs):
+    def quote(self, handle, nonce):
         body = (struct.pack(">II", handle, len(PASSWORD_SESSION)) + PASSWORD_SESSION
-                + tpm2b(nonce) + struct.pack(">H", ALG_NULL) + pcr_selection(pcrs))
+                + tpm2b(nonce) + struct.pack(">H", ALG_NULL) + pcr_selection(QUOTED_PCRS))
         response = self.command(CC_QUOTE, body, sessions=True)
         parameters_end = 4 + struct.unpack(">I", response[0:4])[0]
         attest_size = struct.unpack(">H", response[4:6])[0]
@@ -109,40 +107,25 @@ class Tpm:
 
 
 def main():
-    args = sys.argv[1:]
-    if args == ["--calibration-key"]:
-        tpm = Tpm(TPM_DEVICE)
-        handle, ak_public = tpm.create_attestation_key()
-        tpm.flush(handle)
-        print(json.dumps({"ak_public": ak_public.hex()}))
-        return
-    calibration = len(args) == 2 and args[0] == "--calibration"
-    if not calibration and len(args) != 1:
+    if len(sys.argv) != 2:
         sys.exit(__doc__)
-    nonce = bytes.fromhex(args[-1])
-    if calibration and len(nonce) != 32:
-        sys.exit("calibration nonce must be 32 bytes")
-    if not calibration and not 16 <= len(nonce) <= 32:
+    nonce = bytes.fromhex(sys.argv[1])
+    if not 16 <= len(nonce) <= 32:
         sys.exit("nonce must be 16-32 bytes")
-    selection = CALIBRATION_PCRS if calibration else QUOTED_PCRS
-    with open(EVENT_LOG, "rb") as stream:
-        event_log = stream.read(MAX_EVENT_LOG + 1) if calibration else stream.read()
-    if calibration and not 0 < len(event_log) <= MAX_EVENT_LOG:
-        sys.exit("unexpected calibration event log size")
     tpm = Tpm(TPM_DEVICE)
     handle, ak_public = tpm.create_attestation_key()
     try:
-        pcrs = tpm.read_pcrs(selection)
-        attest, signature = tpm.quote(handle, nonce, selection)
+        pcrs = tpm.read_pcrs(QUOTED_PCRS)
+        attest, signature = tpm.quote(handle, nonce)
     finally:
         tpm.flush(handle)
     json.dump({
-        "quoted_pcrs": selection,
+        "quoted_pcrs": QUOTED_PCRS,
         "ak_public": ak_public.hex(),
         "attest": attest.hex(),
         "signature": signature.hex(),
         "pcr_read_sha256": {str(pcr): value for pcr, value in sorted(pcrs.items())},
-        "event_log": base64.b64encode(event_log).decode(),
+        "event_log": base64.b64encode(open(EVENT_LOG, "rb").read()).decode(),
     }, sys.stdout)
     print()
 

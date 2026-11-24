@@ -42,9 +42,6 @@ db-node.workspace = true
 db-coord.workspace = true
 db-client.workspace = true
 db-tls.workspace = true
-base64.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 hex.workspace = true
 sha2.workspace = true
 ed25519-dalek.workspace = true
@@ -57,5 +54,4 @@ tokio-util.workspace = true
 [dev-dependencies]
 db-testenv.workspace = true
 tempfile.workspace = true
-p256.workspace = true
-ecdsa.workspace = true
+serde_json.workspace = true

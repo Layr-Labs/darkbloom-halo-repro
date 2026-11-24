@@ -1,7 +1,6 @@
 //! A bounded llama.cpp text adapter. Consumer text reaches only the local
 //! `llama-server`; the agent encrypts the resulting bytes for the consumer.
 
-mod package;
 mod recycle;
 
 use crate::comfy::recycle::{GEN_FILE, read_generation};
@@ -37,9 +36,6 @@ pub struct LlamaConfig {
     pub model_path: PathBuf,
     /// Lowercase SHA-256 pinned in the release manifest.
     pub model_sha256: String,
-    /// Exact verified model-package manifest, copied into trusted runtime
-    /// state by Node OS. Its bytes are included in the attested file set.
-    pub model_manifest: Option<PathBuf>,
     /// Approved workflow JSON; its exact bytes are attested.
     pub workflow_path: PathBuf,
     /// Maximum generated tokens, at most 1024.
@@ -122,34 +118,12 @@ fn valid_model_id(id: &str) -> bool {
 /// uses the same validation and streaming hash as [`Llama::connect`] without
 /// requiring a running server or a supervisor control directory.
 pub fn llama_release(model_id: &str, model_path: &Path, workflow_path: &Path) -> Result<(Vec<Artifact>, Vec<Model>), EngineError> {
-    llama_release_with_manifest(model_id, model_path, workflow_path, None)
-}
-
-/// Pins a separately installed model package as well as its GGUF. Signature
-/// and dm-verity verification belong to Node OS's package loader; this checks
-/// canonical manifest contents against the actual GGUF and workflow bytes.
-pub fn llama_release_with_manifest(
-    model_id: &str,
-    model_path: &Path,
-    workflow_path: &Path,
-    manifest_path: Option<&Path>,
-) -> Result<(Vec<Artifact>, Vec<Model>), EngineError> {
     if !valid_model_id(model_id) {
         return Err(EngineError("llama model ID is invalid".to_owned()));
     }
     let workflow = workflow_artifact(workflow_path)?;
-    let files = model_files(model_id, model_path, &workflow, manifest_path)?;
-    Ok((vec![workflow], vec![Model { id: model_id.to_owned(), kind: "text".to_owned(), files: Some(files) }]))
-}
-
-fn model_files(model_id: &str, path: &Path, workflow: &Artifact, manifest: Option<&Path>) -> Result<Vec<Artifact>, EngineError> {
-    let model = model_artifact(path)?;
-    let mut files = vec![model];
-    if let Some(path) = manifest {
-        let gguf = files.first().ok_or_else(|| EngineError("llama model artifact missing".to_owned()))?;
-        files.push(package::manifest_artifact(path, model_id, gguf, workflow)?);
-    }
-    Ok(files)
+    let model = model_artifact(model_path)?;
+    Ok((vec![workflow], vec![Model { id: model_id.to_owned(), kind: "text".to_owned(), files: Some(vec![model]) }]))
 }
 
 impl Llama {
@@ -167,20 +141,18 @@ impl Llama {
         };
         let http = LlamaHttp::new(&cfg.url)?;
         let hash_cfg = cfg.clone();
-        let (workflow, files) = tokio::task::spawn_blocking(move || {
-            let workflow = workflow_artifact(&hash_cfg.workflow_path)?;
-            let files = model_files(&hash_cfg.model_id, &hash_cfg.model_path, &workflow, hash_cfg.model_manifest.as_deref())?;
-            Ok::<_, EngineError>((workflow, files))
+        let (workflow, model_file) = tokio::task::spawn_blocking(move || {
+            Ok::<_, EngineError>((workflow_artifact(&hash_cfg.workflow_path)?, model_artifact(&hash_cfg.model_path)?))
         })
         .await
         .map_err(|_| EngineError("llama integrity check failed".to_owned()))??;
-        if files.first().map(|file| file.sha256.as_str()) != Some(cfg.model_sha256.as_str()) {
+        if model_file.sha256 != cfg.model_sha256 {
             return Err(EngineError("llama model SHA-256 mismatch".to_owned()));
         }
         if read_generation(&dir).is_none() {
             return Err(EngineError(format!("llama process recycling needs a valid {GEN_FILE}")));
         }
-        let model = ModelReport { id: cfg.model_id.clone(), files };
+        let model = ModelReport { id: cfg.model_id.clone(), files: vec![model_file] };
         let recycler = LlamaRecycler::new(dir, http.clone(), cfg.model_id.clone(), cfg.warmup);
         let gpu = Arc::new(tokio::sync::Mutex::new(Slot::default()));
         let result = Self { cfg, http, model, workflow, gpu, recycler };

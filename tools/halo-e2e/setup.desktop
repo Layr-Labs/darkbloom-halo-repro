@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Darkbloom Setup
-Comment=Set up the Darkbloom OS on this AMD computer
-Exec=/usr/local/bin/darkbloom-setup
-Icon=computer
-Terminal=false
-Categories=System;Utility;
-StartupNotify=true

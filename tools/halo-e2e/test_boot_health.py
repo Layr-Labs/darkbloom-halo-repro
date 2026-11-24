@@ -6,7 +6,7 @@ import pathlib
 import unittest
 
 
-SCRIPT = pathlib.Path(__file__).with_name("boot-health.py")
+SCRIPT = pathlib.Path(__file__).resolve().parents[2] / "nodeos/text/rootfs/usr/lib/darkbloom/boot-health.py"
 SPEC = importlib.util.spec_from_file_location("boot_health", SCRIPT)
 HEALTH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HEALTH)

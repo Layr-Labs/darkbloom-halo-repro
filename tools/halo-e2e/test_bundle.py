@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 import tempfile
 import unittest
 
@@ -42,25 +41,6 @@ class BundleTests(unittest.TestCase):
         accepted = self.copy(parsed)
         self.assertEqual((accepted / "out/install-id").read_bytes(), b"release-001\n")
         self.assertEqual((accepted / "out/root.erofs").stat().st_mode & 0o777, 0o600)
-
-    def test_cli_catalog_bundle_has_only_boot_and_os_files(self):
-        for name in bundle.NAMES - bundle.CATALOG_NAMES:
-            (self.staging / name).unlink()
-        subprocess.run(
-            [sys.executable, "-B", str(Path(__file__).with_name("make-bundle.py")),
-             "--sequence", "2", "--model-mode", "catalog", str(self.staging)],
-            check=True, stdout=subprocess.DEVNULL,
-        )
-        raw = (self.staging / "manifest.json").read_bytes()
-        manifest = bundle.parse_manifest(raw)
-        self.assertEqual((manifest["v"], manifest["domain"]), (2, bundle.CATALOG_DOMAIN))
-        accepted = self.copy(manifest)
-        self.assertEqual({f"out/{path.name}" for path in (accepted / "out").iterdir()}, bundle.CATALOG_NAMES)
-
-        manifest["v"] = 1
-        manifest["domain"] = bundle.DOMAIN
-        with self.assertRaises(ValueError):
-            bundle.parse_manifest(bundle.canonical(manifest))
 
     def test_rejects_schema_domain_boolean_sequence_and_unknown_paths(self):
         for key, value in (("domain", "other"), ("sequence", True), ("sequence", 0), ("extra", 1)):

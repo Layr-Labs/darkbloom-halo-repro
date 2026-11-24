@@ -143,7 +143,6 @@ fn run(args: &[String]) {
         .string("text-model-id", "qwen3-coder-30b-a3b-instruct-q4-k-m", "approved text model ID")
         .string("text-model", "", "approved GGUF file")
         .string("text-model-sha256", "", "expected GGUF SHA-256")
-        .string("text-model-manifest", "", "verified model-package manifest copied by Node OS; included in attestation")
         .string("text-workflow", "", "approved fixed text workflow JSON")
         .int("text-max-tokens", 1024, "maximum generated text tokens")
         .string("comfy-url", "http://127.0.0.1:8190", "ComfyUI (loopback)")
@@ -159,10 +158,6 @@ fn run(args: &[String]) {
         .boolean("engine-warmup", true, "with -engine-recycle: one fixed warm-up generation after each restart (no consumer data)")
         .string("kem", "", "job KEM (default X-Wing)");
     fs.parse_or_exit(args);
-    let model_manifest = fs.str("text-model-manifest");
-    if !model_manifest.is_empty() && fs.str("engine") != "llama" {
-        fail("-text-model-manifest needs -engine llama");
-    }
     let mut token = zeroize::Zeroizing::new(fs.str("token"));
     let token_file = fs.str("token-file");
     if !token_file.is_empty() {
@@ -209,7 +204,6 @@ fn run(args: &[String]) {
                     model_id: fs.str("text-model-id"),
                     model_path: PathBuf::from(fs.str("text-model")),
                     model_sha256: fs.str("text-model-sha256"),
-                    model_manifest: (!model_manifest.is_empty()).then(|| PathBuf::from(&model_manifest)),
                     workflow_path: PathBuf::from(fs.str("text-workflow")),
                     max_tokens: fs.int_value("text-max-tokens"),
                     recycle: (!recycle.is_empty()).then(|| PathBuf::from(&recycle)),

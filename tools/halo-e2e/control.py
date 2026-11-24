@@ -206,13 +206,6 @@ def configure_dual_boot(enabled):
     print(json.dumps({"firmware_dual_boot": enabled, "boot_order": target, "factory_default": target[0]}))
 
 
-def run_installer(bundle, manifest, operation):
-    env = {"NODEOS_TEXT_WORK": str(bundle), "ID": manifest["install_id"]}
-    if manifest["v"] == 2:
-        env["NODEOS_MODEL_MODE"] = "catalog"
-    run(["/bin/bash", str(LIB / "install.sh"), operation], capture=False, extra_env=env)
-
-
 def install():
     check_esp()
     verify_factory()
@@ -240,7 +233,8 @@ def install():
     finally:
         os.close(staging_fd)
     install_id = manifest["install_id"]
-    run_installer(destination, manifest, "install")
+    run(["/bin/bash", str(LIB / "install.sh"), "install"], capture=False,
+        extra_env={"NODEOS_TEXT_WORK": str(destination), "ID": install_id})
     save("current.json", {"bundle": destination.name, "install_id": install_id,
                           "sequence": manifest["sequence"]})
     print(json.dumps({"installed": install_id, "sequence": manifest["sequence"], "rebooted": False}))
@@ -253,7 +247,8 @@ def installed_action(operation):
     if manifest["install_id"] != current["install_id"] or manifest["sequence"] != current["sequence"]:
         raise ValueError("Installed state mismatch")
     check_sidecars(current["install_id"])
-    run_installer(bundle, manifest, operation)
+    run(["/bin/bash", str(LIB / "install.sh"), operation], capture=False,
+        extra_env={"NODEOS_TEXT_WORK": str(bundle), "ID": current["install_id"]})
 
 
 def wifi_profile():

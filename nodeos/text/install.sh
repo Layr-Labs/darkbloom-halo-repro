@@ -32,12 +32,6 @@ EFI_DIR=$ESP/EFI/darkbloom-text/$ID
 MOK_CERT=/var/lib/darkbloom-text-e2e/trust/boot-cert.der
 MOK_CHECKER=/usr/local/libexec/darkbloom-text-e2e/check-mok.py
 MOK_SHA256=$(device_get mok_cert_sha256)
-PAYLOAD_FILES=(root.erofs root.verity)
-case "${NODEOS_MODEL_MODE:-pinned}" in
-    pinned) PAYLOAD_FILES+=(models.erofs models.verity) ;;
-    catalog) ;;
-    *) echo 'Unsupported model storage mode' >&2; exit 1 ;;
-esac
 
 check_esp() {
     test "$(findmnt -n --types vfat -o FSTYPE "$ESP")" = vfat
@@ -58,13 +52,14 @@ install)
     expected=$(awk 'NR==1 {print $1}' "$OUT/signed.efi.sha256")
     [[ $expected =~ ^[a-fA-F0-9]{64}$ ]]
     test "$(sha256sum "$OUT/signed.efi" | cut -d' ' -f1)" = "${expected,,}"
-    # The protected controller selects the layout from the signed envelope.
-    python3 - "$OUT/payload.sha256" "${PAYLOAD_FILES[@]}" <<'PY'
+    # The privileged bootstrap must snapshot and approve these four literal
+    # payload filenames and hashes; no path from the manifest is executed.
+    python3 - "$OUT/payload.sha256" <<'PY'
 from pathlib import Path
 import re, sys
 rows = [line.split() for line in Path(sys.argv[1]).read_text().splitlines()]
-expected = set(sys.argv[2:])
-if len(rows) != len(expected) or {r[1] for r in rows if len(r) == 2} != expected:
+expected = {'root.erofs','root.verity','models.erofs','models.verity'}
+if len(rows) != 4 or {r[1] for r in rows if len(r) == 2} != expected:
     raise SystemExit('Unexpected payload manifest filenames')
 if any(len(r) != 2 or not re.fullmatch('[a-fA-F0-9]{64}',r[0]) for r in rows):
     raise SystemExit('Malformed payload manifest')
@@ -81,7 +76,7 @@ PY
     old_entries=$(efibootmgr | sed -n 's/^Boot\([a-fA-F0-9]\{4\}\)[* ].*/\1/p' | sort)
     install -d -m 0755 /var/lib/darkbloom-text-nodeos "$DATA" "$EFI_DIR"
     printf '%s\n' "$before" >"$DATA/boot-order.before"
-    for name in "${PAYLOAD_FILES[@]}"; do
+    for name in root.erofs root.verity models.erofs models.verity; do
         cp --reflink=auto "$OUT/$name" "$DATA/$name"
         chown root:root "$DATA/$name"
         chmod 0600 "$DATA/$name"

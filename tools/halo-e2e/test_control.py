@@ -41,7 +41,7 @@ class ControlTests(unittest.TestCase):
             rows.append(dict(name=name, size=len(data), sha256=hashlib.sha256(data).hexdigest()))
         raw = bundle.canonical(dict(v=1, domain=bundle.DOMAIN, sequence=1, install_id="release-001", files=rows))
         (self.staging / "manifest.json").write_bytes(raw)
-        private = self.private_key = self.base / "ephemeral-test.key"
+        private = self.base / "ephemeral-test.key"
         subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(private)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with (self.state / "trust/boot-public.pem").open("wb") as output:
             subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout"], check=True, stdout=output, stderr=subprocess.DEVNULL)
@@ -70,25 +70,6 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(control.load("sequence.json")["sequence"], 0)
         self.assertEqual(list((self.state / "bundles").iterdir()), [])
         self.hardware.assert_not_called()
-
-    def test_signed_catalog_install_and_verify_select_the_os_only_layout(self):
-        path = self.staging / "manifest.json"
-        manifest = bundle.parse_manifest(path.read_bytes())
-        manifest.update(v=2, domain=bundle.CATALOG_DOMAIN)
-        manifest["files"] = [row for row in manifest["files"] if row["name"] in bundle.CATALOG_NAMES]
-        path.write_bytes(bundle.canonical(manifest))
-        subprocess.run(
-            ["openssl", "dgst", "-sha256", "-sign", str(self.private_key),
-             "-out", str(self.staging / "manifest.sig"), str(path)], check=True,
-        )
-
-        control.install()
-        control.installed_action("verify")
-
-        for call in self.hardware.call_args_list:
-            self.assertEqual(call.kwargs["extra_env"]["NODEOS_MODEL_MODE"], "catalog")
-        accepted = self.state / "bundles/1-release-001/out"
-        self.assertEqual({f"out/{path.name}" for path in accepted.iterdir()}, bundle.CATALOG_NAMES)
 
     def test_rejects_stub_sidecars_before_acceptance(self):
         directory = self.esp / "loader/addons"

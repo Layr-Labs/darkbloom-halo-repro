@@ -557,7 +557,7 @@ impl Verifier {
 
         // 8. Node OS release: signed, logged, above the floor, and matching
         // PCR 9/12 (and PCR 4 boot chain).
-        let Some(rel) = self.match_release(&mut v, &pcrs, &now, &st) else {
+        let Some(rel) = self.match_release(&mut v, &pcrs, &now) else {
             v.statement = Some(st);
             return v.rejected();
         };
@@ -592,12 +592,10 @@ impl Verifier {
         v
     }
 
-    fn match_release(&self, v: &mut Verdict, pcrs: &BTreeMap<u32, Vec<u8>>, now: &GoTime, st: &Statement) -> Option<Arc<Manifest>> {
+    fn match_release(&self, v: &mut Verdict, pcrs: &BTreeMap<u32, Vec<u8>>, now: &GoTime) -> Option<Arc<Manifest>> {
         let hex_of = |p: u32| pcrs.get(&p).map(hex::encode).unwrap_or_default();
         let (pcr4, pcr9, pcr11, pcr12) = (hex_of(4), hex_of(9), hex_of(11), hex_of(12));
         let mut reasons = Vec::new();
-        let mut selected: Option<&TrustedRelease> = None;
-        let mut diagnostic: Option<&TrustedRelease> = None;
         for tr in &self.releases {
             let m = &tr.manifest;
             if (m.boot.path == "uki") != self.pcrs().contains(&11) {
@@ -638,22 +636,6 @@ impl Verifier {
                     continue;
                 }
             }
-            // Independent model packages share an immutable OS boot. Choose
-            // a signed approval for the actually attested runtime, then the
-            // highest allowed SVN; preserve input order for equal SVNs.
-            if diagnostic.is_none_or(|prior| m.svn > prior.manifest.svn) {
-                diagnostic = Some(tr);
-            }
-            if runtime_policy(&mut Verdict::default(), m, st) && selected.is_none_or(|prior| m.svn > prior.manifest.svn) {
-                selected = Some(tr);
-            }
-        }
-        // With no runtime match, let the normal runtime check explain the
-        // best boot candidate's failure (preserving single-release errors).
-        // Safety requirements are checked once on the selected release;
-        // failure must never retry a weaker same-runtime approval.
-        if let Some(tr) = selected.or(diagnostic) {
-            let m = &tr.manifest;
             v.add(
                 "release",
                 true,
@@ -779,20 +761,6 @@ fn runtime_policy(v: &mut Verdict, m: &Manifest, st: &Statement) -> bool {
     const EFFECT: &str = "required";
     let mut ok = true;
     let rt = &m.runtime;
-    // Catalog mode must attest an actual selected package, rather than an
-    // empty model list that merely happens to contain no unapproved files.
-    // Any explicit catalog token enables this guard, including conflicting
-    // duplicate mode tokens; a later token cannot silently relax the check.
-    if m.boot.load_options.split_whitespace().any(|field| field == "nodeos.model-mode=catalog") {
-        let package = st.runtime.models.as_slice();
-        let valid = package.len() == 1
-            && package.first().is_some_and(|model| {
-                model.files.iter().any(|file| file.name == "manifest.json" && file.bytes > 0 && db_release::is_sha256_hex(&file.sha256))
-            });
-        if !valid {
-            return v.add("model-package", false, EFFECT, "catalog mode requires exactly one attested model with a manifest.json pin");
-        }
-    }
     if !rt.engine.name.is_empty() && st.runtime.engine != rt.engine.name {
         ok &= v.add("engine", false, EFFECT, format!("engine {:?}, release pins {:?}", st.runtime.engine, rt.engine.name));
     }
@@ -812,13 +780,9 @@ fn runtime_policy(v: &mut Verdict, m: &Manifest, st: &Statement) -> bool {
             continue;
         };
         // The reported file set must be exactly the release's, hash for hash.
-        let want: BTreeMap<&str, (String, i64)> =
-            am.files().iter().map(|f| (f.name.as_str(), (f.sha256.to_lowercase(), f.bytes))).collect();
-        let got: BTreeMap<&str, (String, i64)> = rm.files.iter().map(|f| (f.name.as_str(), (f.sha256.to_lowercase(), f.bytes))).collect();
-        let complete = got.len() == want.len()
-            && rm.files.len() == got.len()
-            && am.files().len() == want.len()
-            && want.iter().all(|(n, h)| got.get(n) == Some(h));
+        let want: BTreeMap<&str, String> = am.files().iter().map(|f| (f.name.as_str(), f.sha256.to_lowercase())).collect();
+        let got: BTreeMap<&str, String> = rm.files.iter().map(|f| (f.name.as_str(), f.sha256.to_lowercase())).collect();
+        let complete = got.len() == want.len() && rm.files.len() == got.len() && want.iter().all(|(n, h)| got.get(n) == Some(h));
         if !complete {
             ok &= v.add("model", false, EFFECT, format!("model {:?} files do not match the release's pinned weights", rm.id));
         }
@@ -934,17 +898,13 @@ mod tests {
             ..Verifier::default()
         };
         let mut pcrs = BTreeMap::from([(4, vec![4u8; 32]), (9, vec![9u8; 32]), (12, vec![0u8; 32])]);
-        let statement = Statement::default();
-        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now, &statement).is_none(), "omitted PCR 11 admitted");
+        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now).is_none(), "omitted PCR 11 admitted");
         pcrs.insert(11, vec![1u8; 32]);
-        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now, &statement).is_none(), "changed PCR 11 admitted");
+        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now).is_none(), "changed PCR 11 admitted");
         pcrs.insert(11, vec![11u8; 32]);
-        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now, &statement).is_some(), "matching UKI PCR 11 rejected");
+        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now).is_some(), "matching UKI PCR 11 rejected");
         let legacy = Verifier { required_pcrs: Vec::new(), ..verifier };
-        assert!(
-            legacy.match_release(&mut Verdict::default(), &pcrs, &now, &statement).is_none(),
-            "UKI release admitted under Type #1 profile"
-        );
+        assert!(legacy.match_release(&mut Verdict::default(), &pcrs, &now).is_none(), "UKI release admitted under Type #1 profile");
     }
 
     fn sep(pcr: u32) -> LogEvent {
@@ -1068,212 +1028,6 @@ mod tests {
     }
 
     // A statement must report every pinned weight file, not just a subset.
-    fn package_approval(model_id: &str, manifest_byte: u8, svn: u32, now: GoTime) -> Manifest {
-        use sha2::{Digest as _, Sha256};
-        let artifact = |name: &str, bytes: &[u8]| Artifact {
-            name: name.to_owned(),
-            sha256: hex::encode(Sha256::digest(bytes)),
-            bytes: bytes.len() as i64,
-        };
-        let cmdline = format!("ro nodeos.model-mode=catalog roothash={} {}", "ab".repeat(32), PRODUCTION_CMDLINE_FLAGS.join(" "));
-        let sections =
-            vec![artifact(".linux", b"same OS kernel"), artifact(".cmdline", cmdline.as_bytes()), artifact(".initrd", b"same OS root")];
-        let apps = vec![artifact("shimx64.efi", b"same shim"), artifact("uki", b"same signed UKI")];
-        let app_digests: Vec<Vec<u8>> = apps.iter().map(|a| hex::decode(&a.sha256).unwrap()).collect();
-        let m = Manifest {
-            schema: db_release::SCHEMA.to_owned(),
-            name: "catalog-nodeos".to_owned(),
-            version: format!("{model_id}-{manifest_byte}-{svn}"),
-            svn,
-            channel: "production".to_owned(),
-            issued_at: now.add(chrono::Duration::minutes(-1)),
-            expires_at: now.add(chrono::Duration::hours(1)),
-            boot: Boot {
-                path: "uki".to_owned(),
-                boot_apps: Some(apps),
-                pcr4_sha256: hex::encode(db_release::predict_pcr4(&app_digests)),
-                load_options: cmdline.clone(),
-                load_options_sha256: hex::encode(Sha256::digest(cmdline.as_bytes())),
-                initrd_sha256: hex::encode(Sha256::digest(b"same OS root")),
-                pcr9_sha256: "09".repeat(32),
-                pcr12_sha256: "00".repeat(32),
-                pcr11_sha256: hex::encode(db_release::predict_pcr11(&sections).unwrap()),
-                uki_sections: Some(sections),
-                pcr0_sha256: "00".repeat(32),
-                pcr7_sha256: "00".repeat(32),
-                pcr14_sha256: "00".repeat(32),
-            },
-            runtime: Runtime {
-                engine: Artifact { name: "llama.cpp".to_owned(), ..Artifact::default() },
-                models: Some(vec![Model {
-                    id: model_id.to_owned(),
-                    kind: "text".to_owned(),
-                    files: Some(vec![
-                        Artifact { name: "model.gguf".to_owned(), sha256: "aa".repeat(32), bytes: 123 },
-                        Artifact { name: "manifest.json".to_owned(), sha256: hex::encode([manifest_byte; 32]), bytes: 456 },
-                    ]),
-                }]),
-                ..Runtime::default()
-            },
-            ..Manifest::default()
-        };
-        m.validate().unwrap();
-        m
-    }
-
-    fn package_statement(m: &Manifest) -> Statement {
-        Statement {
-            tpm_mode: "hardware".to_owned(),
-            bound_key: Some(crate::BoundKey::default()),
-            runtime: RuntimeReport {
-                engine: "llama.cpp".to_owned(),
-                models: m.runtime.models().iter().map(|m| ModelReport { id: m.id.clone(), files: m.files().to_vec() }).collect(),
-                ..RuntimeReport::default()
-            },
-            status: Status {
-                lockdown: "confidentiality".to_owned(),
-                dash_enabled: Some(false),
-                gpu: GpuStatus { enforce_isolation: Some(1), owner: "node".to_owned(), ..GpuStatus::default() },
-                ..Status::default()
-            },
-            ..Statement::default()
-        }
-    }
-
-    fn package_pcrs(m: &Manifest) -> BTreeMap<u32, Vec<u8>> {
-        [
-            (0, &m.boot.pcr0_sha256),
-            (4, &m.boot.pcr4_sha256),
-            (7, &m.boot.pcr7_sha256),
-            (9, &m.boot.pcr9_sha256),
-            (11, &m.boot.pcr11_sha256),
-            (12, &m.boot.pcr12_sha256),
-            (14, &m.boot.pcr14_sha256),
-        ]
-        .into_iter()
-        .map(|(p, h)| (p, hex::decode(h).unwrap()))
-        .collect()
-    }
-
-    fn package_verifier(releases: Vec<Manifest>) -> Verifier {
-        Verifier {
-            required_pcrs: UKI_PCRS.to_vec(),
-            release_policy: Some(Policy { min_svn: 1, require_logged: true, ..Policy::default() }),
-            releases: releases.into_iter().map(|m| TrustedRelease { manifest: Arc::new(m), envelope: vec![], logged: true }).collect(),
-            ..Verifier::default()
-        }
-    }
-
-    #[test]
-    fn same_uki_selects_approval_for_actual_model_package_then_highest_allowed_svn() {
-        let now = GoTime::now_utc();
-        let model_a = package_approval("model-a", 0xbb, 3, now);
-        let model_b = package_approval("model-b", 0xcc, 9, now);
-        let revised_a = package_approval("model-a", 0xdd, 8, now); // same GGUF, different signed manifest
-        let newest_a = package_approval("model-a", 0xbb, 5, now);
-        let st = package_statement(&model_a);
-        let pcrs = package_pcrs(&model_a);
-        let verifier = package_verifier(vec![model_b, revised_a, model_a, newest_a.clone()]);
-        let selected = verifier.match_release(&mut Verdict::default(), &pcrs, &now, &st).unwrap();
-        assert_eq!(selected.id(), newest_a.id());
-        assert!(runtime_policy(&mut Verdict::default(), &selected, &st));
-        let mut peer = newest_a.clone();
-        peer.version = "equal-svn-other-signing".to_owned();
-        let verifier = package_verifier(vec![peer.clone(), newest_a]);
-        assert_eq!(verifier.match_release(&mut Verdict::default(), &pcrs, &now, &st).unwrap().id(), peer.id(), "equal SVN order changed");
-    }
-
-    #[test]
-    fn package_selection_preserves_floor_revocation_expiry_and_logging() {
-        let now = GoTime::now_utc();
-        let old = package_approval("model-a", 0xbb, 3, now);
-        let newer = package_approval("model-a", 0xbb, 5, now);
-        let st = package_statement(&old);
-        let pcrs = package_pcrs(&old);
-        for reason in ["revoked", "expired", "future", "unlogged"] {
-            let mut verifier = package_verifier(vec![newer.clone(), old.clone()]);
-            match reason {
-                "revoked" => {
-                    verifier.release_policy.as_mut().unwrap().revoked.insert(newer.id());
-                }
-                "expired" => {
-                    Arc::make_mut(&mut verifier.releases.first_mut().unwrap().manifest).expires_at = now.add(chrono::Duration::seconds(-1))
-                }
-                "future" => {
-                    Arc::make_mut(&mut verifier.releases.first_mut().unwrap().manifest).issued_at = now.add(chrono::Duration::hours(1))
-                }
-                _ => verifier.releases.first_mut().unwrap().logged = false,
-            }
-            assert_eq!(verifier.match_release(&mut Verdict::default(), &pcrs, &now, &st).unwrap().id(), old.id(), "{reason}");
-        }
-        let mut verifier = package_verifier(vec![old]);
-        verifier.release_policy.as_mut().unwrap().min_svn = 4;
-        assert!(verifier.match_release(&mut Verdict::default(), &pcrs, &now, &st).is_none());
-    }
-
-    #[test]
-    fn stronger_same_runtime_requirements_cannot_fall_back_to_weaker_approval() {
-        let now = GoTime::now_utc();
-        let old = package_approval("model-a", 0xbb, 3, now);
-        let mut newer = package_approval("model-a", 0xbb, 5, now);
-        newer.requires.boot_health = true;
-        let st = package_statement(&old);
-        let pcrs = package_pcrs(&old);
-        let verifier = package_verifier(vec![old.clone(), newer.clone()]);
-        assert!(requirements(&mut Verdict::default(), &old, &st, true));
-        let selected = verifier.match_release(&mut Verdict::default(), &pcrs, &now, &st).unwrap();
-        assert_eq!(selected.id(), newer.id());
-        assert!(!requirements(&mut Verdict::default(), &selected, &st, true), "unsafe downgrade to weaker requirements");
-    }
-
-    #[test]
-    fn model_package_requires_exact_manifest_hash_size_and_complete_file_set() {
-        let now = GoTime::now_utc();
-        let m = package_approval("model-a", 0xbb, 3, now);
-        let st = package_statement(&m);
-        let pcrs = package_pcrs(&m);
-        for mismatch in ["missing-manifest", "manifest-hash", "manifest-size"] {
-            let mut bad = st.clone();
-            let files = &mut bad.runtime.models.first_mut().unwrap().files;
-            match mismatch {
-                "missing-manifest" => {
-                    files.pop();
-                }
-                "manifest-hash" => files.last_mut().unwrap().sha256 = "cc".repeat(32),
-                _ => files.last_mut().unwrap().bytes += 1,
-            }
-            let verifier = package_verifier(vec![m.clone()]);
-            let mut verdict = Verdict::default();
-            let diagnostic = verifier.match_release(&mut verdict, &pcrs, &now, &bad).unwrap();
-            assert_eq!(diagnostic.id(), m.id()); // preserve the original single-candidate diagnostic path
-            assert!(verdict.checks.iter().any(|c| c.name == "release" && c.ok));
-            assert!(!runtime_policy(&mut verdict, &diagnostic, &bad), "{mismatch} admitted");
-            assert!(verdict.checks.iter().any(|c| matches!(c.name.as_str(), "model" | "model-package") && !c.ok));
-        }
-    }
-
-    #[test]
-    fn catalog_mode_requires_one_attested_package_without_changing_legacy() {
-        let m = package_approval("model-a", 0xbb, 3, GoTime::now_utc());
-        let st = package_statement(&m);
-        assert!(runtime_policy(&mut Verdict::default(), &m, &st));
-        let mut empty = st.clone();
-        empty.runtime.models.clear();
-        assert!(!runtime_policy(&mut Verdict::default(), &m, &empty));
-        let mut multiple = st.clone();
-        multiple.runtime.models.extend(st.runtime.models.clone());
-        assert!(!runtime_policy(&mut Verdict::default(), &m, &multiple));
-        let mut legacy = m.clone();
-        legacy.boot.load_options = legacy.boot.load_options.replace("nodeos.model-mode=catalog", "");
-        assert!(runtime_policy(&mut Verdict::default(), &legacy, &empty));
-        let mut missing = st.clone();
-        missing.runtime.models.first_mut().unwrap().files.pop();
-        assert!(!runtime_policy(&mut Verdict::default(), &m, &missing));
-        let mut conflicting = m;
-        conflicting.boot.load_options.push_str(" nodeos.model-mode=pinned");
-        assert!(!runtime_policy(&mut Verdict::default(), &conflicting, &empty));
-    }
-
     #[test]
     fn model_files_must_be_complete() {
         let art = |n: &str, h: &str| Artifact { name: n.to_owned(), sha256: h.to_owned(), bytes: 0 };

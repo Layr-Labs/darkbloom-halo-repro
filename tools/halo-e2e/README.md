@@ -27,28 +27,10 @@ public certificate under a private output directory; physically enroll its
 DER certificate before this bootstrap. Only the DER certificate enters the
 bootstrap archive.
 
-Create a new staging directory on the trusted workstation. For example:
-
-```bash
-python3 tools/halo-e2e/make-device-config.py \
-  --out-dir /PRIVATE/STAGE \
-  --boot-cert /PRIVATE/PUBLIC/enrolled-boot.der \
-  --hostname HALO_HOSTNAME --owner-user OWNER \
-  --host-partuuid HOST_ROOT_PARTUUID --host-root-uuid HOST_ROOT_FS_UUID \
-  --esp-mount /efi --esp-disk /dev/nvme1n1 --esp-partition 2 \
-  --esp-device /dev/nvme1n1p2 --esp-partuuid ESP_PARTUUID \
-  --factory-efi-dir EFI/FACTORY_VENDOR \
-  --factory-boot-label 'FACTORY BOOT LABEL' --wifi-iface WIFI_IFACE
-python3 tools/halo-e2e/make-bootstrap-archive.py \
-  --inputs /PRIVATE/STAGE/inputs --output /PRIVATE/STAGE/bootstrap.tar
-```
-
-The first command stages exactly `inputs/device.json` and
-`inputs/boot-cert.der`. The second packages exactly ten fixed source/input
-files and prints the archive SHA-256. It accepts no secret file or signer key.
-Review the archive and keep its digest separately from the Halo transfer. The
-config schema is strict and rejects unknown fields, shell metacharacters in
-identity fields, path traversal, and mismatched ESP disk/partition names.
+[Runbook step 1](../../RUNBOOK.md#1-establish-a-boot-signer-and-device-pins)
+creates the device configuration and bootstrap archive. The archive builder
+packages exactly ten source and public input files and prints its SHA-256.
+Keep the reviewed digest separately from the Halo transfer.
 
 ## 2. Verify once, then execute only root-owned extracted bytes
 
@@ -140,11 +122,8 @@ device identifiers.
 The owner places the files named in [`bundle.py`](bundle.py) under the fixed
 staging directory, creates the canonical manifest with
 `make-bundle.py --sequence N STAGING`, and has the trusted signer sign those
-exact manifest bytes with the enrolled boot key. For a [catalog-enabled
-build](MODEL-CATALOG.md), use `--model-mode catalog` to select the six-file
-bundle that carries the OS and UKI. The default eight-file bundle carries the
-original pinned model as well. The helper verifies the signature, streams only
-the approved files from open descriptors into root-private storage, then
+exact manifest bytes with the enrolled boot key. The helper verifies the
+signature, streams only the approved files from open descriptors into root-private storage, then
 executes its protected installer. Sequence numbers strictly
 increase; failed accepted installs consume a sequence. The helper rejects
 unknown EFI file drift, unrelated BootNext changes, and UKI sidecars.

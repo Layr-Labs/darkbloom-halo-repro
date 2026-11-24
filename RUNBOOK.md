@@ -5,20 +5,16 @@ those labelled **Halo** in its normal Linux OS as the ordinary owner account.
 Use a fresh copy of this repository at the same commit on both machines.
 Start with the [prerequisites](README.md#requirements).
 
-The reference lab demo booted a signed Darkbloom image through the factory
-shim. The Mac verified AMD TPM evidence, issued a serving lease, and received
-a verified receipt for an encrypted text request. Sections 1–5 reproduce
-that one-time boot path. Section 6 makes the same direct shim entry selectable
-in the firmware boot picker, with AMD Linux first, and tests inference through
-that picker. Run the full checklist on each new unit and firmware profile.
+Sections 1–5 reproduce the one-time signed boot and verified encrypted text
+request completed on the reference Halo. Section 6 adds the same Darkbloom
+shim entry to the firmware boot picker, leaves AMD Linux as the default, and
+checks inference again. The firmware-picker path still needs a physical run.
 
 Use synthetic prompts and a dedicated lab Wi-Fi profile. For WPA2/WPA3 Personal,
 use a system-saved NetworkManager connection with its password in the keyfile
 so the appliance can connect without a desktop keyring. This reference build
 includes that Wi-Fi keyfile in its private image. The serving kernel and GPU
-stack remain trusted. The [TPM-sealed Wi-Fi wizard](tools/halo-e2e/WIZARD-TEST.md)
-and [downloadable model catalog](tools/halo-e2e/MODEL-CATALOG.md) are separate
-previews, with end-to-end Halo acceptance still pending.
+stack remain trusted.
 
 Commands below use placeholders. Keep the actual device UUIDs, LAN address,
 EK material, Wi-Fi keyfile, pairing/API tokens, captured event logs, keys,
@@ -301,8 +297,6 @@ export WIFI_PROFILE="$PRIVATE_HALO_STAGE/nodeos.nmconnection"
 export PAIRING_TOKEN_FILE="$PRIVATE_HALO_STAGE/pairing-token"
 export TEXT_MODEL="$PRIVATE_HALO_MODEL/model.gguf"
 export TEXT_MODEL_ID=qwen3-coder-30b-a3b-instruct-q4-k-m
-export MODEL_MODE=pinned
-export WIFI_MODE=embedded
 bash nodeos/text/scripts/build-patched-systemd-core.sh "$PRIVATE_HALO_STAGE/systemd-build"
 bash nodeos/text/scripts/test-patched-systemd-core.sh "$PRIVATE_HALO_STAGE/systemd-build/artifacts/libsystemd-core-257.so"
 export SYSTEMD_CORE="$PRIVATE_HALO_STAGE/systemd-build/artifacts/libsystemd-core-257.so"
@@ -520,8 +514,7 @@ sudo efibootmgr -v
 2. Restart normally once and confirm AMD Linux still starts.
 3. Restart again and open the Halo firmware's one-time boot picker using the
    startup key for your firmware. Select **Darkbloom Text Node OS** for the
-   installed ID. The desktop
-   wizard's automatic systemd-boot menu is a separate preview.
+   installed ID.
 4. Repeat section 5 after a fresh serving lease appears. Write to a new output
    path such as `"$MAC_PRIVATE/dual-boot-response.txt"`. Record the verified
    receipt and confirm the return timer boots AMD Linux.
