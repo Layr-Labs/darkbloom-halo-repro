@@ -1,17 +1,24 @@
-# Run the attested encrypted text demo
+# Set up a fresh Halo for Darkbloom dual boot and mock inference
 
 Run the commands labelled **Mac** on the trusted coordinator/signing machine and
 those labelled **Halo** in its normal Linux OS as the ordinary owner account.
 Use a fresh copy of this repository at the same commit on both machines.
 Start with the [prerequisites](README.md#requirements).
 
-This reproduces the functional demo: a signed appliance boots on the Halo,
-the Mac verifies fresh AMD TPM evidence against an approved image, and the
-client sends an encrypted text request and verifies its encrypted result and receipt.
-Use synthetic prompts. The serving kernel remains trusted; this is not a CPU/GPU TEE.
-Boot-health diagnostics are not an admission requirement for this functional demo.
-The generalized setup and fresh-key path still need validation on your hardware;
-local source tests are not a substitute for completing this run.
+The reference lab demo booted a signed Darkbloom image through the factory
+shim. The Mac verified AMD TPM evidence, issued a serving lease, and received
+a verified receipt for an encrypted text request. Sections 1–5 reproduce
+that one-time boot path. Section 6 makes the same direct shim entry selectable
+in the firmware boot picker, with AMD Linux first, and tests inference through
+that picker. Run the full checklist on each new unit and firmware profile.
+
+Use synthetic prompts and a dedicated lab Wi-Fi profile. For WPA2/WPA3 Personal,
+use a system-saved NetworkManager connection with its password in the keyfile
+so the appliance can connect without a desktop keyring. This reference build
+includes that Wi-Fi keyfile in its private image. The serving kernel and GPU
+stack remain trusted. The [TPM-sealed Wi-Fi wizard](tools/halo-e2e/WIZARD-TEST.md)
+and [downloadable model catalog](tools/halo-e2e/MODEL-CATALOG.md) are separate
+previews, with end-to-end Halo acceptance still pending.
 
 Commands below use placeholders. Keep the actual device UUIDs, LAN address,
 EK material, Wi-Fi keyfile, pairing/API tokens, captured event logs, keys,
@@ -20,12 +27,41 @@ linked tools define the current accepted input formats. Run every rootless
 build command as the ordinary Halo user, and use the fixed root controller
 only for the listed install/boot/cleanup operations.
 
-Use private paths such as these from the respective checkout roots; carry
-the actual values between machines through a private transfer, not through
-Git:
+## 0. Finish AMD Linux first-run setup
+
+1. Connect a monitor and keyboard. Finish factory Linux setup and its required
+   updates, then reboot into AMD Linux.
+2. Join the Halo and Mac to the same reachable lab Wi-Fi network. Use the
+   **Remote Access** page in AMD Ryzen AI Developer Center to find the Halo's
+   address and owner account. Check SSH from the Mac. This demo can run entirely
+   over Wi-Fi.
+3. Check the reference software and disk layout. Take the factory boot baseline
+   in step 1 after all pending factory updates have finished.
+
+See the [AMD Ryzen AI Halo User Guide](https://developer.amd.com/playbooks/user-guide/).
+
+```bash
+uname -r
+dpkg-query -W systemd libsystemd-shared llama.cpp-tools libggml0-backend-hip amd64-microcode
+sudo mokutil --sb-state
+ls -l /dev/tpmrm0
+findmnt -no SOURCE,FSTYPE,FSROOT -T /var/lib
+df -h /
+podman info --format '{{.Host.Security.Rootless}}'
+```
+
+The reference used RAH-002, vendor kernel `7.2.7+rex-amd64`, systemd
+`257.13-1~deb13u1`, Secure Boot, Pluton TPM, rootless Podman and Btrfs
+top-level subvolume 5. See [requirements](README.md#requirements). If the
+installed systemd ABI or storage layout differs, have the matching build and
+device configuration reviewed before continuing.
+
+Use private paths such as these from the respective checkout roots. Transfer
+the actual values directly between the two machines and keep them out of Git.
 
 ```bash
 # Mac, from this repository root:
+umask 077
 export HALO_SSH="OWNER@HALO_ADDRESS"
 export MAC_LAN_IPV4="MAC_LAN_ADDRESS"
 export NEW_INSTALL_ID=text-demo-001
@@ -33,11 +69,11 @@ export MAC_PRIVATE="$PWD/.halo-e2e/repro-state"
 export PRIVATE_BOOTSTRAP_STAGE="$MAC_PRIVATE/bootstrap"
 mkdir -p "$PRIVATE_BOOTSTRAP_STAGE"
 chmod 0700 "$MAC_PRIVATE" "$PRIVATE_BOOTSTRAP_STAGE"
-
 ```
 
 ```bash
 # Halo, from this repository root as its ordinary user:
+umask 077
 export MAC_LAN_IPV4="SAME_MAC_LAN_ADDRESS"
 export NEW_INSTALL_ID=text-demo-001
 export NEXT_SEQUENCE=1
@@ -76,7 +112,8 @@ Copy the public values into the Mac shell: `HALO_HOSTNAME`, `OWNER_USER`,
 for the mounted EFI partition; `FACTORY_EFI_DIR` and `FACTORY_BOOT_LABEL`
 from its shim boot entry; and `WIFI_IFACE` for the connected wireless device.
 The factory EFI directory must contain `shimx64.efi` and `mmx64.efi`.
-
+Confirm the factory AMD Linux entry is first in `BootOrder`. Record that
+order before any Darkbloom install.
 
 On a fresh machine, generate a new Secure Boot signing key **off the Halo**:
 
@@ -87,18 +124,27 @@ export ENROLLED_CERT_PEM="$MAC_PRIVATE/new-boot-key/boot-cert.pem"
 export MAC_ONLY_BOOT_KEY="$MAC_PRIVATE/new-boot-key/boot-signing.key"
 ```
 
-On the Halo, transfer **only** that public DER certificate and enroll it:
+Transfer only the public DER certificate from the Mac, then enroll it on
+the Halo.
 
 ```bash
-PUBLIC_BOOT_CERT_DER="$HOME/boot-cert.der"  # transfer only the public DER here
-sudo mokutil --import "$PUBLIC_BOOT_CERT_DER"
-# Reboot and physically confirm enrollment through shim/MokManager.
+# Mac
+scp "$ENROLLED_CERT_DER" "${HALO_SSH}:boot-cert.der"
 ```
 
-Enroll only its public certificate through shim/MokManager with physical
-confirmation, then verify Secure Boot and the enrolled certificate from the
-normal OS. Do not transfer the private key to the Halo. The operator must review and
-pin the certificate's DER SHA-256 in the signer and root bootstrap before
+```bash
+# Halo
+PUBLIC_BOOT_CERT_DER="$HOME/boot-cert.der"  # transfer only the public DER here
+sudo mokutil --import "$PUBLIC_BOOT_CERT_DER"
+sudo reboot
+```
+
+At the Halo console, choose **Enroll MOK**, continue, confirm with the
+enrollment password just set, and choose **Reboot**. Back in AMD Linux, run
+`sudo mokutil --test-key "$HOME/boot-cert.der"` and `mokutil --sb-state`.
+Continue after the key is enrolled and Secure Boot is enabled. Keep the private
+key on the Mac. Review and pin the certificate's DER SHA-256 in the signer
+and root bootstrap before
 using a different key. Keep the factory shim, firmware trust, and original
 boot order as baseline evidence. The helper's protected bootstrap is not a
 generic sudo grant and must be adapted to the target's device paths.
@@ -120,6 +166,7 @@ python3 tools/halo-e2e/make-device-config.py \
 python3 tools/halo-e2e/make-bootstrap-archive.py \
   --inputs "$PRIVATE_BOOTSTRAP_STAGE/inputs" \
   --output "$PRIVATE_BOOTSTRAP_STAGE/bootstrap.tar"
+scp "$PRIVATE_BOOTSTRAP_STAGE/bootstrap.tar" "${HALO_SSH}:bootstrap.tar"
 ```
 
 The second command hashes an archive containing this input plus the exact
@@ -134,7 +181,7 @@ the narrowly scoped `/usr/local/sbin/darkbloom-text-e2e-control` grant.
 Inspect `sudo /usr/local/sbin/darkbloom-text-e2e-control status`; do not run
 owner-writable source files as root. The helper accepts only `status`,
 `ek-chain`, `quote <64hex>`, `wifi-profile` (before first install), `install`,
-`boot`, and `cleanup`.
+`boot`, `enable-dual-boot`, `disable-dual-boot`, and `cleanup`.
 
 ## 2. Start the Mac-side mock coordinator and build the image
 
@@ -153,6 +200,16 @@ Never transfer the boot or release signing private keys to the Halo.
 
 Keep credential files mode `0600` and staging directories `0700`.
 
+On the Halo, set `ESP_MOUNT` and `FACTORY_EFI_DIR` from step 1 and copy the
+factory shim into the owner's private stage. Compare its digest after
+transferring it to the Mac.
+
+```bash
+# Halo
+FACTORY_SHIM="$PRIVATE_HALO_STAGE/factory-shimx64.efi"
+sudo cat "$ESP_MOUNT/$FACTORY_EFI_DIR/shimx64.efi" >"$FACTORY_SHIM"
+sha256sum "$FACTORY_SHIM"
+```
 
 Build the current Rust binaries from a frozen source revision and record
 their SHA-256. The Mac runner stores credentials and captures in ignored
@@ -163,7 +220,24 @@ connects directly over LAN WSS with the same pinned CA.
 ```bash
 cargo build --manifest-path poc-rs/Cargo.toml --locked -p db-cli --bins
 python3 poc-rs/scripts/halo-text.py init --lan-ip "$MAC_LAN_IPV4"
+# Keep the mock coordinator running in this terminal.
 python3 poc-rs/scripts/halo-text.py coord --capture
+```
+
+Use a second Mac terminal in the same checkout for signing and the client.
+Define the Mac path variables there too. The fresh coordinator should report
+zero approved releases. Allow incoming TCP 8790 for the mock coordinator on
+the Mac while keeping its firewall on.
+
+```bash
+# Mac
+HALO_STAGE="/home/$OWNER_USER/darkbloom-text-repro"
+REVIEWED_FACTORY_SHIM="$MAC_PRIVATE/factory-shimx64.efi"
+scp "${HALO_SSH}:${HALO_STAGE}/factory-shimx64.efi" "$REVIEWED_FACTORY_SHIM"
+shasum -a 256 "$REVIEWED_FACTORY_SHIM"
+scp "$PRIVATE_BOOTSTRAP_STAGE/inputs/device.json" "${HALO_SSH}:${HALO_STAGE}/device.json"
+scp .halo-e2e/tls/ca.pem "${HALO_SSH}:${HALO_STAGE}/ca.pem"
+scp .halo-e2e/provider-token "${HALO_SSH}:${HALO_STAGE}/pairing-token"
 ```
 
 On the Halo, build fresh compatible `dbnode` and `dbrelease` binaries from
@@ -183,6 +257,9 @@ print that operation's output. Prepare one approved GGUF model and the fixed
 # Halo ordinary user, after the fixed root bootstrap has been installed:
 umask 077
 install -d -m 0700 "$PRIVATE_HALO_STAGE"
+chmod 0600 "$PRIVATE_HALO_STAGE/pairing-token"
+curl --fail --silent --show-error --cacert "$PRIVATE_HALO_STAGE/ca.pem" \
+  "https://${MAC_LAN_IPV4}:8790/v1/coordinator" >/dev/null
 sudo /usr/local/sbin/darkbloom-text-e2e-control wifi-profile \
   >"$PRIVATE_HALO_STAGE/nodeos.nmconnection"
 chmod 0600 "$PRIVATE_HALO_STAGE/nodeos.nmconnection"
@@ -224,6 +301,8 @@ export WIFI_PROFILE="$PRIVATE_HALO_STAGE/nodeos.nmconnection"
 export PAIRING_TOKEN_FILE="$PRIVATE_HALO_STAGE/pairing-token"
 export TEXT_MODEL="$PRIVATE_HALO_MODEL/model.gguf"
 export TEXT_MODEL_ID=qwen3-coder-30b-a3b-instruct-q4-k-m
+export MODEL_MODE=pinned
+export WIFI_MODE=embedded
 bash nodeos/text/scripts/build-patched-systemd-core.sh "$PRIVATE_HALO_STAGE/systemd-build"
 bash nodeos/text/scripts/test-patched-systemd-core.sh "$PRIVATE_HALO_STAGE/systemd-build/artifacts/libsystemd-core-257.so"
 export SYSTEMD_CORE="$PRIVATE_HALO_STAGE/systemd-build/artifacts/libsystemd-core-257.so"
@@ -255,12 +334,17 @@ to the Halo.
 
 ```bash
 # Mac only: the private boot key is mounted read-only into the signer container.
+HALO_CHECKOUT="/home/$OWNER_USER/darkbloom-halo-repro"  # use the actual checkout
+UNSIGNED_EFI="$MAC_PRIVATE/unsigned.efi"
+scp "${HALO_SSH}:${HALO_CHECKOUT}/nodeos/text/.work/out/unsigned.efi" "$UNSIGNED_EFI"
 ENROLLED_CERT_DER_SHA256=$(cat "$MAC_PRIVATE/new-boot-key/boot-cert.sha256")
 NEW_PRIVATE_SIGN_DIR="$MAC_PRIVATE/signed-$NEW_INSTALL_ID"
 docker pull 'debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4'
 bash poc-rs/scripts/sign-text-uki.sh --unsigned "$UNSIGNED_EFI" \
   --out "$NEW_PRIVATE_SIGN_DIR" --cert "$ENROLLED_CERT_PEM" \
   --key "$MAC_ONLY_BOOT_KEY" --cert-sha256 "$ENROLLED_CERT_DER_SHA256"
+SIGNED_EFI="$NEW_PRIVATE_SIGN_DIR/signed.efi"
+scp "$SIGNED_EFI" "$NEW_PRIVATE_SIGN_DIR/signed.efi.sha256" "${HALO_SSH}:${HALO_STAGE}/"
 ```
 
 On the Halo, after uploading `signed.efi` and its hash record to private
@@ -268,6 +352,8 @@ paths, stage exactly the eight data files. This example uses the builder's
 default private work directory; substitute `NODEOS_TEXT_WORK/out` if set:
 
 ```bash
+SIGNED_EFI="$PRIVATE_HALO_STAGE/signed.efi"
+SIGNED_EFI_SHA256="$PRIVATE_HALO_STAGE/signed.efi.sha256"
 install -d -m 0700 "$HALO_STAGING/out"
 cp --reflink=auto nodeos/text/.work/out/{root.erofs,root.verity,models.erofs,models.verity,payload.sha256,install-id} \
   "$HALO_STAGING/out/"
@@ -280,8 +366,11 @@ Transfer only `manifest.json` to the Mac, sign it there, and return
 `manifest.sig` to the fixed Halo staging directory:
 
 ```bash
+HALO_BUNDLE="/home/$OWNER_USER/darkbloom-text-e2e-staging"
+scp "${HALO_SSH}:${HALO_BUNDLE}/manifest.json" "$MAC_PRIVATE/manifest.json"
 openssl dgst -sha256 -sign "$MAC_ONLY_BOOT_KEY" \
   -out "$MAC_PRIVATE/manifest.sig" "$MAC_PRIVATE/manifest.json"
+scp "$MAC_PRIVATE/manifest.sig" "${HALO_SSH}:${HALO_BUNDLE}/manifest.sig"
 ```
 
 Stage exactly the eight data files named in
@@ -311,11 +400,17 @@ selection. Review the source and built image, Secure Boot/MOK state, event log a
 you built and signed before approving it.
 
 ```bash
+# Mac. Choose the fresh capture written during this unit's first Darkbloom boot.
+find .halo-e2e/captures -type f -name '*.json' -print
+PRIVATE_CAPTURE_JSON=".halo-e2e/captures/REPLACE_WITH_FRESH_CAPTURE_FILENAME.json"
 PRIVATE_REFERENCE_EVENTLOG="$MAC_PRIVATE/reference-eventlog.bin"
 python3 poc-rs/scripts/halo-text.py extract-capture "$PRIVATE_CAPTURE_JSON" \
   --out "$PRIVATE_REFERENCE_EVENTLOG"
-poc-rs/target/debug/dbrelease inspect-log -in "$PRIVATE_REFERENCE_EVENTLOG"
-
+poc-rs/target/debug/dbrelease inspect-log -in "$PRIVATE_REFERENCE_EVENTLOG" \
+  | tee "$MAC_PRIVATE/eventlog-summary.txt"
+REVIEWED_PCR9_SHA256=$(awk '$1=="PCR" && $2=="9" && $3=="replay" {print $4}' \
+  "$MAC_PRIVATE/eventlog-summary.txt")
+printf '%s\n' "$REVIEWED_PCR9_SHA256" | grep -Eq '^[0-9a-f]{64}$'
 ```
 
 To avoid copying a large GGUF to the Mac, make one **dev UKI manifest
@@ -324,12 +419,13 @@ then review it on the Mac. Its placeholder PCR 9 is not trusted for
 production; `-runtime-from` imports only the pinned runtime fields. It
 cannot be combined with `-agent`, `-engine`, `-models-dir`, `-hash-cache`, or
 the `-text-*` flags in the production build.
-Set `REVIEWED_MIN_SCRTM` from the target's measured S-CRTM event, not the
-displayed BIOS version. For the reference RAH-002 configuration this value is `MFGB0.04.00`; check your own measured value. Supply this flag in both
-manifests and review it against the reference log.
+Set `REVIEWED_MIN_SCRTM` from the reviewed `EV_SCRTM_VERSION` event under
+PCR 0 in the summary. The reference RAH-002 value was `MFGB0.04.00`.
+Use the measured value from your unit in both shells.
 
 ```bash
 # Halo ordinary user, using the freshly built Linux dbrelease binary:
+REVIEWED_MIN_SCRTM="REPLACE_WITH_REVIEWED_SCRTM_VALUE"
 ZERO64=$(printf '%064d' 0)  # dev template only; never a production PCR 9
 PRIVATE_RUNTIME_TEMPLATE="$PRIVATE_HALO_STAGE/runtime-template.json"
 "$HALO_DBRELEASE" build -channel dev -version "$VERSION" -svn "$SVN" \
@@ -338,14 +434,15 @@ PRIVATE_RUNTIME_TEMPLATE="$PRIVATE_HALO_STAGE/runtime-template.json"
   -agent "$AGENT" -text-model-id "$TEXT_MODEL_ID" \
   -text-model "$TEXT_MODEL" -text-workflow nodeos/text/workflow.json \
   -out "$PRIVATE_RUNTIME_TEMPLATE"
-
 ```
 
 ```bash
 # Mac signer, after transferring and reviewing the dev template:
 export VERSION=0.1.0-demo
 export SVN=1
+REVIEWED_MIN_SCRTM="SAME_REVIEWED_SCRTM_VALUE"
 PRIVATE_RUNTIME_TEMPLATE="$MAC_PRIVATE/runtime-template.json"
+scp "${HALO_SSH}:${HALO_STAGE}/runtime-template.json" "$PRIVATE_RUNTIME_TEMPLATE"
 PRIVATE_MANIFEST="$MAC_PRIVATE/production-manifest.json"
 PRIVATE_RELEASE_DSSE="$MAC_PRIVATE/release.dsse.json"
 MAC_ONLY_RELEASE_KEY="$PWD/.halo-e2e/keys/release.key"
@@ -382,7 +479,7 @@ sudo /usr/local/sbin/darkbloom-text-e2e-control status
 sudo /usr/local/sbin/darkbloom-text-e2e-control boot
 ```
 
-## 5. Independent client check and cleanup
+## 5. Verify the encrypted inference result
 
 Only after a lease is visible, use the Mac client with its pinned TLS CA,
 AMD anchors, release signer and coordinator log key. `text` independently
@@ -397,17 +494,55 @@ python3 poc-rs/scripts/halo-text.py client -- providers
 # Set PROVIDER_ID to the leased Halo listed above.
 python3 poc-rs/scripts/halo-text.py client -- verify "$PROVIDER_ID"
 python3 poc-rs/scripts/halo-text.py client -- text \
-  -prompt-file "$PRIVATE_PROMPT_FILE" -max-tokens 64 -out "$PRIVATE_NEW_OUTPUT"
+  -provider "$PROVIDER_ID" -prompt-file "$PRIVATE_PROMPT_FILE" \
+  -max-tokens 64 -out "$PRIVATE_NEW_OUTPUT"
 ```
 
 Success: the command exits zero, prints `receipt verified`, and creates the
 response text file with mode `0600`. Read it locally; the coordinator routes the
 sealed request and result. An unknown release or failed fresh proof must not receive a lease.
 
-After the one-shot return, withdraw the demo release: move its DSSE file out of
-`.halo-e2e/releases/`, restart the mock coordinator, and confirm that a new
-text request is refused with no leased worker. Withdrawal is a coordinator
-policy change; it does not alter an already completed client result.
+## 6. Enable and test the firmware boot picker
+
+After the one-time inference check passes and the Halo returns to AMD Linux,
+run these commands on the Halo. The helper verifies the signed release and
+appends exactly its direct shim entry to the saved firmware order.
+
+```bash
+sudo /usr/local/sbin/darkbloom-text-e2e-control status
+sudo /usr/local/sbin/darkbloom-text-e2e-control enable-dual-boot
+sudo efibootmgr -v
+```
+
+1. Confirm the original factory order is still the prefix and its first entry
+   is AMD Linux. The last entry should be the installed **Darkbloom Text Node OS**
+   for your install ID.
+2. Restart normally once and confirm AMD Linux still starts.
+3. Restart again and open the Halo firmware's one-time boot picker using the
+   startup key for your firmware. Select **Darkbloom Text Node OS** for the
+   installed ID. The desktop
+   wizard's automatic systemd-boot menu is a separate preview.
+4. Repeat section 5 after a fresh serving lease appears. Write to a new output
+   path such as `"$MAC_PRIVATE/dual-boot-response.txt"`. Record the verified
+   receipt and confirm the return timer boots AMD Linux.
+
+The picker should load the same shim → UKI chain as the earlier one-time boot.
+If the picker does not expose the entry or the coordinator rejects its boot
+measurements, record that result and keep the working one-time demo. Verify the
+chain against a fresh capture before approving another release.
+
+To restore the original firmware order or before installing a replacement boot
+image, run `sudo /usr/local/sbin/darkbloom-text-e2e-control disable-dual-boot`
+in AMD Linux. This leaves the installed files available for the protected
+one-time boot command.
+
+## 7. Test release withdrawal and optionally clean up
+
+While Darkbloom is still running, move its DSSE approval out of the Mac's
+active release directory and restart the coordinator. If Darkbloom has already
+returned to AMD Linux, boot it again after withdrawing the approval. Observe a
+new authenticated capture from the running appliance with
+`release_admitted=false` before checking that no new job is routed.
 
 ```bash
 mkdir -m 0700 -p .halo-e2e/withdrawn
@@ -430,12 +565,12 @@ python3 poc-rs/scripts/halo-text.py client -- text \
 ```
 
 The final `text` command must fail with no leased provider and must not
-create an output file. Verify the factory boot order and invoke the fixed
-controller's `cleanup` to revoke its sudo grant. It intentionally retains
-ordinary SSH authorization and installed data/boot entries; inspect and
-remove those separately under the owner's change process. Preserve only
-redacted, reviewed evidence for sharing. Do not publish captures, event-log
-contents, certificates unique to the chip, private prompts, or secrets.
+create an output file. To keep the demo available, restore the reviewed
+approval and restart the mock coordinator when you next want to serve. To
+retire the lab setup, run these commands in AMD Linux. Cleanup restores the
+original firmware order and revokes the lab sudo grant. It retains ordinary
+SSH access and the installed files and firmware record. Preserve only
+redacted, reviewed evidence for sharing.
 
 ```bash
 sudo /usr/local/sbin/darkbloom-text-e2e-control status

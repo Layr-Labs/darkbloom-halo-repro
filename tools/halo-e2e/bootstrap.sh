@@ -16,6 +16,7 @@ DEVICE_PY=$REPO/tools/halo-e2e/device_config.py
 for command in /usr/bin/efibootmgr /usr/sbin/blkid /usr/sbin/visudo /usr/bin/findmnt /usr/bin/mokutil /usr/bin/openssl /usr/bin/python3 /usr/bin/bash /usr/bin/systemctl /usr/bin/install /usr/bin/mktemp /usr/bin/stat /usr/bin/sha256sum /usr/bin/env /usr/bin/id /usr/bin/getent /usr/bin/hostname /usr/bin/grep /usr/bin/cut /usr/bin/cat /usr/bin/mv /usr/bin/rm /usr/bin/rmdir /usr/bin/chmod /usr/bin/dirname /usr/bin/awk /usr/bin/sed /usr/bin/sort /usr/bin/comm /usr/bin/df /usr/bin/cp /usr/bin/chown /usr/bin/readlink /usr/bin/sync; do
     [[ -f $command && -x $command ]] || { echo "Missing prerequisite: $command" >&2; exit 1; }
 done
+[[ -x /usr/bin/cmp ]] || { echo 'Missing prerequisite: /usr/bin/cmp' >&2; exit 1; }
 for trusted in /usr /usr/local /usr/local/sbin /var /var/lib /etc /etc/sudoers.d "$REPO" "$REPO/tools" "$REPO/tools/halo-e2e" "$REPO/tools/tpm" "$REPO/nodeos" "$REPO/nodeos/text" "$REPO/inputs"; do
     [[ -d $trusted && ! -L $trusted && $(stat -c %u "$trusted") == 0 ]]
     mode=$(stat -c %a "$trusted")
@@ -121,7 +122,7 @@ cat > "$TEMP/helper" <<'WRAPPER'
 exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C LC_ALL=C HOME=/root /usr/bin/python3 -I -B /usr/local/libexec/darkbloom-text-e2e/control.py "$@"
 WRAPPER
 chmod 0755 "$TEMP/helper"
-for operation in status ek-chain 'quote *' wifi-profile install boot cleanup; do
+for operation in status ek-chain 'quote *' wifi-profile install boot enable-dual-boot disable-dual-boot cleanup; do
     printf '%s ALL=(root) NOPASSWD: /usr/local/sbin/darkbloom-text-e2e-control %s\n' "$OWNER" "$operation"
 done > "$TEMP/grant"
 chmod 0440 "$TEMP/grant"

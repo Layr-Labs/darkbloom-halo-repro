@@ -125,6 +125,8 @@ The fixed helper provides these operations:
 | `wifi-profile` | Active pinned Wi-Fi keyfile, before first install only |
 | `install` | Verify signed eight-file bundle and stage an EFI entry, no reboot |
 | `boot` | Verify installed bytes, set only this entry's BootNext, reboot once |
+| `enable-dual-boot` | Verify the installed release and append its direct shim entry to the firmware boot order, with AMD Linux first |
+| `disable-dual-boot` | Remove the Darkbloom entry from the boot order while preserving the installed files |
 | `cleanup` | Verify factory baseline, restore recognized fallback order, revoke this sudo grant |
 
 `wifi-profile` contains the network credential. Redirect it **directly** to a
@@ -135,12 +137,15 @@ that private file, a private pairing token, model weights, a compatible Linux
 and the trusted signer workflow. Keep EK certificate files out of Git as
 device identifiers.
 
-The owner places the exact eight files named in [`bundle.py`](bundle.py) under
-their fixed staging directory, creates the canonical manifest with
+The owner places the files named in [`bundle.py`](bundle.py) under the fixed
+staging directory, creates the canonical manifest with
 `make-bundle.py --sequence N STAGING`, and has the trusted signer sign those
-exact manifest bytes with the enrolled boot key. The helper verifies the
-signature, streams the eight files from open descriptors into root-private
-storage, then executes its protected installer. Sequence numbers strictly
+exact manifest bytes with the enrolled boot key. For a [catalog-enabled
+build](MODEL-CATALOG.md), use `--model-mode catalog` to select the six-file
+bundle that carries the OS and UKI. The default eight-file bundle carries the
+original pinned model as well. The helper verifies the signature, streams only
+the approved files from open descriptors into root-private storage, then
+executes its protected installer. Sequence numbers strictly
 increase; failed accepted installs consume a sequence. The helper rejects
 unknown EFI file drift, unrelated BootNext changes, and UKI sidecars.
 

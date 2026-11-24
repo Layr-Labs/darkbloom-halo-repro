@@ -8,7 +8,7 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use db_engine::{Engine, Llama, LlamaConfig, llama_release};
+use db_engine::{Engine, Llama, LlamaConfig, llama_release, llama_release_with_manifest};
 use db_wire::JobRequest;
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
@@ -135,6 +135,7 @@ async fn env() -> Env {
         model_id: MODEL.to_owned(),
         model_path,
         model_sha256,
+        model_manifest: None,
         workflow_path,
         max_tokens: 64,
         recycle: Some(recycle),
@@ -225,6 +226,91 @@ async fn invalid_configuration_and_workflow_fail_before_serving() {
     std::fs::write(&e.cfg.workflow_path, WORKFLOW).unwrap();
     std::fs::write(&e.cfg.model_path, b"not a GGUF model").unwrap();
     assert!(llama_release(MODEL, &e.cfg.model_path, &e.cfg.workflow_path).is_err());
+}
+
+fn package_for(cfg: &LlamaConfig) -> serde_json::Value {
+    json!({
+        "v":1,"domain":"darkbloom/model-package/v1","model_id":cfg.model_id,
+        "model_sha256":cfg.model_sha256,"model_size":std::fs::metadata(&cfg.model_path).unwrap().len(),
+        "verity_root":"ab".repeat(32),"image_size":4096,"tree_size":4096,
+        "image_sha256":"cd".repeat(32),"tree_sha256":"ef".repeat(32),
+        "workflow_sha256":hex::encode(Sha256::digest(std::fs::read(&cfg.workflow_path).unwrap())),
+        "engine_version":"1:0.2.0+dfsg1-1+rex2bvdebian13.1","security_version":1
+    })
+}
+
+fn canonical_package(value: &serde_json::Value) -> Vec<u8> {
+    let mut raw = serde_json::to_vec(value).unwrap();
+    raw.push(b'\n');
+    raw
+}
+
+#[tokio::test]
+async fn model_package_manifest_is_pinned_identically_by_release_and_runtime() {
+    let e = env().await;
+    let path = e._tmp.path().join("source-package-manifest.json");
+    let raw = canonical_package(&package_for(&e.cfg));
+    std::fs::write(&path, &raw).unwrap();
+    let (workflows, models) = llama_release_with_manifest(MODEL, &e.cfg.model_path, &e.cfg.workflow_path, Some(&path)).unwrap();
+    let files = models[0].files.as_ref().unwrap();
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].name, "model.gguf");
+    assert_eq!(files[1].name, "manifest.json");
+    assert_eq!(files[1].sha256, hex::encode(Sha256::digest(&raw)));
+    assert_eq!(files[1].bytes, raw.len() as i64);
+    let mut cfg = e.cfg.clone();
+    cfg.model_manifest = Some(path.clone());
+    let engine = Llama::connect(cfg).await.unwrap();
+    assert_eq!(engine.models()[0].files, *files);
+    assert_eq!(engine.workflows(), workflows);
+    assert_eq!(engine.caps().len(), 1);
+    assert_eq!(engine.caps()[0].id, MODEL);
+    assert_eq!(&*generate(&engine, &request("PACKAGE-PROMPT", 8), CancellationToken::new()).await.unwrap().data, b"hello");
+    let mut revised = package_for(&e.cfg);
+    revised["security_version"] = 2.into();
+    std::fs::write(&path, canonical_package(&revised)).unwrap();
+    let (_, revised_models) = llama_release_with_manifest(MODEL, &e.cfg.model_path, &e.cfg.workflow_path, Some(&path)).unwrap();
+    assert_ne!(
+        revised_models[0].files.as_ref().unwrap()[1].sha256,
+        files[1].sha256,
+        "distinct signed manifests collapsed to one model identity"
+    );
+}
+
+#[tokio::test]
+async fn mismatched_or_noncanonical_package_manifest_fails_before_serving() {
+    let e = env().await;
+    let path = e._tmp.path().join("manifest.json");
+    for (field, value) in [
+        ("model_id", json!("other")),
+        ("model_sha256", json!("00".repeat(32))),
+        ("model_size", json!(999)),
+        ("workflow_sha256", json!("00".repeat(32))),
+        ("security_version", json!(0)),
+        ("security_version", json!(4294967296u64)),
+        ("image_size", json!(0)),
+        ("tree_size", json!(-1)),
+        ("image_sha256", json!("zz".repeat(32))),
+        ("tree_sha256", json!("EE".repeat(32))),
+        ("engine_version", json!("arbitrary/version")),
+        ("unexpected", json!(true)),
+    ] {
+        let mut package = package_for(&e.cfg);
+        package[field] = value;
+        std::fs::write(&path, canonical_package(&package)).unwrap();
+        assert!(llama_release_with_manifest(MODEL, &e.cfg.model_path, &e.cfg.workflow_path, Some(&path)).is_err(), "accepted bad {field}");
+    }
+    let raw = canonical_package(&package_for(&e.cfg));
+    for bad in [raw[..raw.len() - 1].to_vec(), serde_json::to_vec_pretty(&package_for(&e.cfg)).unwrap(), b"{}\n".to_vec()] {
+        std::fs::write(&path, bad).unwrap();
+        assert!(llama_release_with_manifest(MODEL, &e.cfg.model_path, &e.cfg.workflow_path, Some(&path)).is_err());
+    }
+    let duplicate = String::from_utf8(raw).unwrap().replacen('{', "{\"security_version\":1,", 1);
+    std::fs::write(&path, duplicate).unwrap();
+    let mut cfg = e.cfg.clone();
+    cfg.model_manifest = Some(path);
+    assert!(Llama::connect(cfg).await.unwrap_err().to_string().contains("model-package manifest"));
+    assert_eq!(count(&e.state), 0);
 }
 
 #[tokio::test]

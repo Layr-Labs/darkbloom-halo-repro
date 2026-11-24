@@ -18,6 +18,8 @@ CN = Darkbloom Halo reproduction boot signer
 basicConstraints = critical,CA:FALSE
 keyUsage = critical,digitalSignature
 extendedKeyUsage = codeSigning
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always
 CONFIG
 openssl req -new -x509 -newkey rsa:3072 -sha256 -nodes -days 365 \
     -config "$out/openssl.cnf" -keyout "$out/boot-signing.key" -out "$out/boot-cert.pem"

@@ -20,11 +20,14 @@ cp "$EXECUTOR" "$T/systemd-executor"
 cat >"$T/Containerfile" <<'EOF'
 FROM docker.io/library/debian:trixie
 ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends systemd systemd-sysv dbus && rm -rf /var/lib/apt/lists/*
+ARG SYSTEMD_VERSION=257.13-1~deb13u1
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+    "systemd=$SYSTEMD_VERSION" "systemd-sysv=$SYSTEMD_VERSION" "libsystemd-shared=$SYSTEMD_VERSION" \
+    "libsystemd0=$SYSTEMD_VERSION" dbus && rm -rf /var/lib/apt/lists/*
 COPY libsystemd-core-257.so /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so
 COPY systemd-executor /usr/lib/systemd/systemd-executor
-RUN test "$(dpkg-query -W -f='${Version}' systemd)" = '257.13-1~deb13u1' \
- && test "$(dpkg-query -W -f='${Version}' libsystemd-shared)" = '257.13-1~deb13u1' \
+RUN test "$(dpkg-query -W -f='${Version}' systemd)" = "$SYSTEMD_VERSION" \
+ && test "$(dpkg-query -W -f='${Version}' libsystemd-shared)" = "$SYSTEMD_VERSION" \
  && ldd /usr/lib/systemd/systemd | grep -q libsystemd-core-257.so \
  && ldd /usr/lib/systemd/systemd-executor | grep -q libsystemd-core-257.so \
  && /usr/lib/systemd/systemd --version | grep -q '+BPF_FRAMEWORK'

@@ -3,6 +3,9 @@ ARG BASE=docker.io/library/debian:trixie
 FROM ${BASE}
 ARG LLAMA_VERSION
 ARG GGML_VERSION
+ARG SYSTEMD_VERSION=257.13-1~deb13u1
+ARG WIFI_MODE=embedded
+ARG MODEL_MODE=pinned
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY build/apt/ /etc/apt/sources.list.d/
@@ -10,7 +13,9 @@ COPY build/keyrings/ /usr/share/keyrings/
 RUN test -n "$LLAMA_VERSION" && test -n "$GGML_VERSION" \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      systemd systemd-sysv udev kmod dbus network-manager wpasupplicant wireless-regdb \
+      "systemd=$SYSTEMD_VERSION" "systemd-sysv=$SYSTEMD_VERSION" "libsystemd-shared=$SYSTEMD_VERSION" \
+      "libsystemd0=$SYSTEMD_VERSION" "udev=$SYSTEMD_VERSION" "libudev1=$SYSTEMD_VERSION" \
+      kmod dbus network-manager wpasupplicant wireless-regdb \
       iproute2 nftables ca-certificates tpm-udev cryptsetup-bin curl \
       "llama.cpp-tools=$LLAMA_VERSION" "libllama0=$LLAMA_VERSION" \
       "libggml0=$GGML_VERSION" "libggml0-backend-hip=$GGML_VERSION" \
@@ -29,14 +34,31 @@ RUN test -n "$MICROCODE_VERSION" \
  && apt-get install -y --no-install-recommends "amd64-microcode=$MICROCODE_VERSION" python3-minimal \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# The default demo embeds its private keyfile. The opt-in image carries only
+# TPM decryptor code; the ciphertext remains outside the immutable image.
+RUN case "$WIFI_MODE" in \
+      embedded) ;; \
+      tpm-sealed) apt-get update \
+        && apt-get install -y --no-install-recommends tpm2-tools python3-cryptography mount util-linux \
+        && apt-get clean && rm -rf /var/lib/apt/lists/* ;; \
+      *) exit 1 ;; \
+    esac
+RUN case "$MODEL_MODE" in \
+      pinned) ;; \
+      catalog) apt-get update \
+        && apt-get install -y --no-install-recommends python3-cryptography mount util-linux \
+        && apt-get clean && rm -rf /var/lib/apt/lists/* ;; \
+      *) exit 1 ;; \
+    esac
+
 # Reviewed source patch: avoid only the unavailable RestrictFileSystems probe
 # under confidentiality lockdown; explicit RestrictFileSystems remains fail-closed.
 ARG SYSTEMD_CORE_SHA256
 ARG SYSTEMD_EXECUTOR_SHA256
 COPY build/systemd/libsystemd-core-257.so /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so
 COPY build/systemd/systemd-executor /usr/lib/systemd/systemd-executor
-RUN test "$(dpkg-query -W -f='${Version}' systemd)" = '257.13-1~deb13u1' \
- && test "$(dpkg-query -W -f='${Version}' libsystemd-shared)" = '257.13-1~deb13u1' \
+RUN test "$(dpkg-query -W -f='${Version}' systemd)" = "$SYSTEMD_VERSION" \
+ && test "$(dpkg-query -W -f='${Version}' libsystemd-shared)" = "$SYSTEMD_VERSION" \
  && printf '%s  /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so\n' "$SYSTEMD_CORE_SHA256" | sha256sum -c - \
  && printf '%s  /usr/lib/systemd/systemd-executor\n' "$SYSTEMD_EXECUTOR_SHA256" | sha256sum -c - \
  && chmod 0644 /usr/lib/x86_64-linux-gnu/systemd/libsystemd-core-257.so \
@@ -61,7 +83,28 @@ RUN chmod -R go-w /usr/share/darkbloom /usr/lib/darkbloom /etc/systemd /etc/sysc
  && test -x /usr/bin/systemd-notify \
  && test -r /usr/lib/darkbloom/engine/check-network.py \
  && chown root:dbnode /usr/share/darkbloom/pairing-token && chmod 0640 /usr/share/darkbloom/pairing-token \
- && chmod 0600 /etc/NetworkManager/system-connections/*.nmconnection \
+ && if test "$WIFI_MODE" = embedded; then \
+      chmod 0600 /etc/NetworkManager/system-connections/*.nmconnection; \
+    else \
+      test -z "$(find /etc/NetworkManager/system-connections /usr/lib/NetworkManager/system-connections -type f -name '*.nmconnection' -print -quit 2>/dev/null)" \
+      && test -r /usr/lib/darkbloom/sealed-wifi-start.py \
+      && chmod 0755 /usr/lib/darkbloom/sealed-wifi-unseal.py \
+      && test -x /usr/lib/darkbloom/sealed-wifi-unseal.py \
+      && test -r /usr/lib/darkbloom/sealed-wifi.py \
+      && test -r /usr/lib/darkbloom/collect_quote.py \
+      && test -r /usr/lib/darkbloom/offline-calibration.py \
+      && test -x /usr/bin/mount && test -x /usr/bin/umount && test -x /usr/sbin/blkid \
+      && test -x /usr/bin/tpm2_unseal \
+      && python3 -I -c 'import cryptography.hazmat.primitives.ciphers.aead'; \
+    fi \
+ && if test "$MODEL_MODE" = catalog; then \
+      test -r /usr/lib/darkbloom/model-package.py \
+      && test -r /usr/lib/darkbloom/catalog-model.py \
+      && test -r /usr/share/darkbloom/model-catalog.json \
+      && test -r /etc/systemd/system/usr-share-darkbloom-models.mount \
+      && test -x /usr/sbin/veritysetup && test -x /usr/bin/mount \
+      && python3 -I -c 'from cryptography.hazmat.primitives import serialization; from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey; key=serialization.load_pem_public_key(open("/usr/share/darkbloom/model-package.pub.pem","rb").read()); assert isinstance(key, Ed25519PublicKey)'; \
+    fi \
  && sha256sum -c /usr/share/darkbloom/amdtee-firmware.sha256 \
  && test "$(stat -Lc %a /usr/lib/firmware/amdtee)" = 755 \
  && for firmware in /usr/lib/firmware/amdtee/*.bin; do \

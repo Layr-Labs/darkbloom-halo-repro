@@ -41,7 +41,7 @@ class ControlTests(unittest.TestCase):
             rows.append(dict(name=name, size=len(data), sha256=hashlib.sha256(data).hexdigest()))
         raw = bundle.canonical(dict(v=1, domain=bundle.DOMAIN, sequence=1, install_id="release-001", files=rows))
         (self.staging / "manifest.json").write_bytes(raw)
-        private = self.base / "ephemeral-test.key"
+        private = self.private_key = self.base / "ephemeral-test.key"
         subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-out", str(private)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         with (self.state / "trust/boot-public.pem").open("wb") as output:
             subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout"], check=True, stdout=output, stderr=subprocess.DEVNULL)
@@ -70,6 +70,25 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(control.load("sequence.json")["sequence"], 0)
         self.assertEqual(list((self.state / "bundles").iterdir()), [])
         self.hardware.assert_not_called()
+
+    def test_signed_catalog_install_and_verify_select_the_os_only_layout(self):
+        path = self.staging / "manifest.json"
+        manifest = bundle.parse_manifest(path.read_bytes())
+        manifest.update(v=2, domain=bundle.CATALOG_DOMAIN)
+        manifest["files"] = [row for row in manifest["files"] if row["name"] in bundle.CATALOG_NAMES]
+        path.write_bytes(bundle.canonical(manifest))
+        subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", str(self.private_key),
+             "-out", str(self.staging / "manifest.sig"), str(path)], check=True,
+        )
+
+        control.install()
+        control.installed_action("verify")
+
+        for call in self.hardware.call_args_list:
+            self.assertEqual(call.kwargs["extra_env"]["NODEOS_MODEL_MODE"], "catalog")
+        accepted = self.state / "bundles/1-release-001/out"
+        self.assertEqual({f"out/{path.name}" for path in accepted.iterdir()}, bundle.CATALOG_NAMES)
 
     def test_rejects_stub_sidecars_before_acceptance(self):
         directory = self.esp / "loader/addons"
@@ -110,6 +129,61 @@ class ReconcileTests(unittest.TestCase):
                 control.reconcile_order()
             runner.assert_not_called()
 
+    def test_only_the_installed_darkbloom_entry_may_be_added(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            (state / "current.json").write_text("{}")
+            factory = ["0007", "0000"]
+            with (
+                patch.object(control, "STATE", state),
+                patch.object(control, "load", return_value={"order": factory}),
+                patch.object(control, "installed_boot_entry", return_value="0010"),
+                patch.object(control, "run") as runner,
+            ):
+                with patch.object(control, "boot_state", return_value=(factory + ["0010"], {})):
+                    self.assertEqual(control.reconcile_order(), factory + ["0010"])
+                    with self.assertRaisesRegex(ValueError, "Disable Darkbloom dual boot"):
+                        control.reconcile_order(allow_dual_boot=False)
+                with patch.object(control, "boot_state", return_value=(factory + ["BEEF"], {})):
+                    with self.assertRaisesRegex(ValueError, "Unrelated BootOrder"):
+                        control.reconcile_order()
+                runner.assert_not_called()
+
+    def test_firmware_selection_preserves_factory_default_and_is_reversible(self):
+        factory = ["0007", "0000", "2001"]
+        dual_boot = factory + ["0010"]
+        for enabled, before, after in ((True, factory, dual_boot), (False, dual_boot, factory)):
+            with (
+                self.subTest(enabled=enabled),
+                patch.object(control, "check_esp"),
+                patch.object(control, "verify_factory"),
+                patch.object(control, "check_bootnext", return_value=False),
+                patch.object(control, "installed_action") as verify,
+                patch.object(control, "reconcile_order", return_value=before),
+                patch.object(control, "installed_boot_entry", return_value="0010"),
+                patch.object(control, "load", return_value={"order": factory}),
+                patch.object(control, "boot_state", side_effect=lambda: (before, {}) if not runner.called else (after, {})),
+                patch.object(control, "run") as runner,
+            ):
+                control.configure_dual_boot(enabled)
+                runner.assert_called_once_with(["/usr/bin/efibootmgr", "--bootorder", ",".join(after)])
+                if enabled:
+                    verify.assert_called_once_with("verify")
+                else:
+                    verify.assert_not_called()
+
+    def test_firmware_entry_is_pinned_to_the_installed_shim_and_esp(self):
+        config = {"esp_partition": 1, "esp_partuuid": "11111111-2222-4333-8444-555555555555"}
+        label = "Darkbloom Text Node OS release-001"
+        path = f"HD(1,GPT,{config['esp_partuuid']},0x1000,0x2000)/File(\\EFI\\darkbloom-text\\release-001\\shimx64.efi)"
+        with (
+            patch.object(control, "load", return_value={"install_id": "release-001"}),
+            patch.object(control, "device", return_value=config),
+            patch.object(Path, "read_text", return_value="0010\n"),
+        ):
+            self.assertEqual(control.installed_boot_entry({"0010": f"{label}\t{path}"}), "0010")
+            with self.assertRaisesRegex(ValueError, "firmware entry changed"):
+                control.installed_boot_entry({"0010": f"{label}\t{path}unexpected EFI load options"})
 
 if __name__ == "__main__":
     unittest.main()

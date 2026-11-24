@@ -20,7 +20,7 @@ mod sanitize;
 
 pub use comfy::{Comfy, ComfyConfig, comfy_release};
 pub use fake::Fake;
-pub use llama::{Llama, LlamaConfig, llama_release};
+pub use llama::{Llama, LlamaConfig, llama_release, llama_release_with_manifest};
 pub use sanitize::{MAX_INPUT_PIXELS, MAX_INPUT_SIDE, sanitize_image};
 
 /// A finished generation. The content is zeroized on drop.

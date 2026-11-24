@@ -127,12 +127,40 @@ def check_sidecars(install_id):
             raise ValueError("Unexpected UKI sidecars: " + str(path))
 
 
-def reconcile_order():
+def installed_boot_entry(entries):
+    current = load("current.json")
+    install_id = current["install_id"]
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", install_id):
+        raise ValueError("Invalid installed release ID")
+    record = Path("/var/lib/darkbloom-text-nodeos") / install_id / "boot-id"
+    entry = record.read_text().strip().upper()
+    if not re.fullmatch(r"[0-9A-F]{4}", entry):
+        raise ValueError("Invalid installed firmware entry")
+    label, separator, device_path = entries.get(entry, "").partition("\t")
+    cfg = device()
+    partition = f"hd({cfg['esp_partition']},gpt,{cfg['esp_partuuid']},"
+    loader = f"/file(\\EFI\\darkbloom-text\\{install_id}\\shimx64.efi)".lower()
+    device_path = device_path.lower()
+    if (not separator or label != f"Darkbloom Text Node OS {install_id}"
+            or not device_path.startswith(partition) or not device_path.endswith(loader)):
+        raise ValueError("Installed Darkbloom firmware entry changed")
+    return entry
+
+
+def reconcile_order(*, allow_dual_boot=True):
     """Only undo a proven factory-fallback prefix; unknown owner changes fail."""
     expected = load("original-boot.json")["order"]
     current, entries = boot_state()
     if current == expected:
-        return
+        return current
+    if (STATE / "current.json").is_file() and len(current) > len(expected) and current[-len(expected)-1:-1] == expected:
+        entry = installed_boot_entry(entries)
+        if entry not in expected and current[-1] == entry:
+            if not allow_dual_boot:
+                raise ValueError("Disable Darkbloom dual boot before installing another release")
+            expected = expected + [entry]
+            if current == expected:
+                return current
     if len(current) <= len(expected) or current[-len(expected):] != expected:
         raise ValueError("Unrelated BootOrder change; refusing to overwrite it")
     extras = current[:-len(expected)]
@@ -150,13 +178,46 @@ def reconcile_order():
     run(["/usr/bin/efibootmgr", "--bootorder", ",".join(expected)])
     if boot_state()[0] != expected:
         raise ValueError("BootOrder reconciliation did not stick")
+    return expected
+
+
+def configure_dual_boot(enabled):
+    check_esp()
+    verify_factory()
+    if check_bootnext():
+        raise ValueError("Wait for the pending one-time boot before changing boot choices")
+    if enabled:
+        installed_action("verify")
+    order = reconcile_order()
+    factory = load("original-boot.json")["order"]
+    if enabled:
+        entry = installed_boot_entry(boot_state()[1])
+        if entry in factory:
+            raise ValueError("Darkbloom entry overlaps the factory boot order")
+        target = factory + [entry]
+    else:
+        target = factory
+    if target != order:
+        if boot_state()[0] != order:
+            raise ValueError("BootOrder changed while preparing the update")
+        run(["/usr/bin/efibootmgr", "--bootorder", ",".join(target)])
+    if boot_state()[0] != target:
+        raise ValueError("BootOrder update did not stick")
+    print(json.dumps({"firmware_dual_boot": enabled, "boot_order": target, "factory_default": target[0]}))
+
+
+def run_installer(bundle, manifest, operation):
+    env = {"NODEOS_TEXT_WORK": str(bundle), "ID": manifest["install_id"]}
+    if manifest["v"] == 2:
+        env["NODEOS_MODEL_MODE"] = "catalog"
+    run(["/bin/bash", str(LIB / "install.sh"), operation], capture=False, extra_env=env)
 
 
 def install():
     check_esp()
     verify_factory()
     check_bootnext()
-    reconcile_order()
+    reconcile_order(allow_dual_boot=False)
     staging_fd = open_dir(staging_path())
     try:
         raw = read_regular(staging_fd, "manifest.json", 32768)
@@ -179,8 +240,7 @@ def install():
     finally:
         os.close(staging_fd)
     install_id = manifest["install_id"]
-    run(["/bin/bash", str(LIB / "install.sh"), "install"], capture=False,
-        extra_env={"NODEOS_TEXT_WORK": str(destination), "ID": install_id})
+    run_installer(destination, manifest, "install")
     save("current.json", {"bundle": destination.name, "install_id": install_id,
                           "sequence": manifest["sequence"]})
     print(json.dumps({"installed": install_id, "sequence": manifest["sequence"], "rebooted": False}))
@@ -193,8 +253,7 @@ def installed_action(operation):
     if manifest["install_id"] != current["install_id"] or manifest["sequence"] != current["sequence"]:
         raise ValueError("Installed state mismatch")
     check_sidecars(current["install_id"])
-    run(["/bin/bash", str(LIB / "install.sh"), operation], capture=False,
-        extra_env={"NODEOS_TEXT_WORK": str(bundle), "ID": current["install_id"]})
+    run_installer(bundle, manifest, operation)
 
 
 def wifi_profile():
@@ -227,7 +286,8 @@ def main():
     if os.geteuid() != 0 or os.uname().nodename != device()["hostname"]:
         raise ValueError("This helper is restricted to root on the pinned device")
     args = sys.argv[1:]
-    if (not args or args[0] not in {"status", "ek-chain", "quote", "wifi-profile", "install", "boot", "cleanup"}
+    if (not args or args[0] not in {"status", "ek-chain", "quote", "wifi-profile", "install", "boot",
+                                   "enable-dual-boot", "disable-dual-boot", "cleanup"}
             or len(args) != (2 if args[0] == "quote" else 1)
             or (args[0] == "quote" and not re.fullmatch(r"[0-9a-fA-F]{64}", args[1]))):
         raise ValueError("Invalid fixed operation/arguments")
@@ -261,14 +321,16 @@ def main():
             reconcile_order()
             installed_action("verify")
             installed_action("boot-once")
+        elif operation in {"enable-dual-boot", "disable-dual-boot"}:
+            configure_dual_boot(operation == "enable-dual-boot")
         elif operation == "cleanup":
             try:
                 check_esp()
                 verify_factory()
                 has_bootnext = check_bootnext()
-                reconcile_order()
                 if has_bootnext:
                     run(["/usr/bin/efibootmgr", "--delete-bootnext"])
+                configure_dual_boot(False)
             finally:
                 # Revocation must remain possible even if unrelated boot/file
                 # changes require manual recovery rather than restoration.

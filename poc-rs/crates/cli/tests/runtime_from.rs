@@ -50,7 +50,10 @@ fn reviewed_template() -> Manifest {
             models: Some(vec![Model {
                 id: "qwen3".to_owned(),
                 kind: "text".to_owned(),
-                files: Some(vec![artifact("model.gguf", b"GGUF test bytes")]),
+                files: Some(vec![
+                    artifact("model.gguf", b"GGUF test bytes"),
+                    artifact("manifest.json", b"reviewed signed model-package manifest\n"),
+                ]),
             }]),
         },
         ..Manifest::default()
@@ -124,10 +127,28 @@ fn reviewed_runtime_is_copied_but_new_uki_is_measured() {
     assert_ne!(built.name, template.name);
     assert_ne!(built.notes, template.notes);
     assert!(built.requires.cmdline_flags.is_empty());
+    let sdboot = dir.path().join("systemd-boot.efi");
+    let sdboot_bytes = tiny_pe(&[(".text", b"factory boot manager")]);
+    std::fs::write(&sdboot, &sdboot_bytes).unwrap();
+    let via_menu = Command::new(bin).args(base).args(["-uki-menu", "-sdboot", &path(&sdboot)]).output().unwrap();
+    assert!(via_menu.status.success(), "{}", String::from_utf8_lossy(&via_menu.stderr));
+    let menu: Manifest = db_gojson::from_slice(&std::fs::read(&output).unwrap()).unwrap();
+    assert_eq!(
+        menu.boot.boot_apps().iter().map(|app| app.name.as_str()).collect::<Vec<_>>(),
+        ["shimx64.efi", "systemd-bootx64.efi", "uki"]
+    );
+    let expected_menu = [
+        hex::decode(&built.boot.boot_apps()[0].sha256).unwrap(),
+        db_release::authenticode_digest(&sdboot_bytes, db_tpm2::HashAlg::Sha256).unwrap(),
+        hex::decode(&built.boot.boot_apps()[1].sha256).unwrap(),
+    ];
+    assert_eq!(menu.boot.pcr4_sha256, hex::encode(db_release::predict_pcr4(&expected_menu)));
+    assert_eq!(menu.boot.pcr11_sha256, built.boot.pcr11_sha256);
+    assert_eq!(menu.runtime, template.runtime);
     let production = Command::new(bin).args(base).args(["-channel", "production"]).output().unwrap();
     assert!(!production.status.success());
     assert!(String::from_utf8_lossy(&production.stderr).contains("production UKI release requires -platform-eventlog"));
-    for conflict in ["agent", "engine", "models-dir", "hash-cache", "text-model-id", "text-model", "text-workflow"] {
+    for conflict in ["agent", "engine", "models-dir", "hash-cache", "text-model-id", "text-model", "text-model-manifest", "text-workflow"] {
         let failed = Command::new(bin).args(base).arg(format!("-{conflict}")).arg("").output().unwrap();
         assert!(!failed.status.success(), "-{conflict} should conflict even when empty");
         assert!(String::from_utf8_lossy(&failed.stderr).contains(&format!("cannot be combined with -{conflict}")));

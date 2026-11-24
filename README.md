@@ -4,8 +4,11 @@ Boot a signed inference appliance on your Halo, verify it from a mock coordinato
 on a Mac using AMD Pluton TPM evidence, send an encrypted text prompt to the
 Radeon GPU, and decrypt the response with a verified receipt.
 
-**Follow [RUNBOOK.md](RUNBOOK.md)** for device setup, key enrollment, builds,
-the two-boot attestation/approval sequence, a text request, and cleanup.
+**Start with the [fresh Halo setup guide](RUNBOOK.md)** to enroll a boot key,
+run encrypted inference through a Mac mock coordinator, and add Darkbloom
+to the firmware boot picker with AMD Linux as the default. The guide follows
+the reference lab's one-time shim boot before testing the firmware picker
+on the new unit.
 
 ## Target owner setup and boot experience
 
@@ -19,14 +22,12 @@ coordinator over TLS. It receives
 prompts only after fresh TPM attestation matches an approved release. On later
 power-ons, the factory boot manager offers AMD OS and Darkbloom OS as choices.
 
-This is a target experience, not an implemented GUI or production deployment.
-The current [runbook](RUNBOOK.md) uses manual MOK enrollment and installation
-with a mock coordinator. Today the UKI embeds device-specific storage pins and
-the root image contains Wi-Fi and provider configuration. An automatic setup
-would need an AMD-trusted boot component that verifies Darkbloom-signed releases,
-or an equivalent vendor-supported signing process, plus separately authenticated,
-bounded device configuration. The wizard, persistent OS menu and real-coordinator
-enrollment/admission still require implementation.
+The reproduction guide uses manual MOK enrollment, the firmware boot picker,
+and a mock coordinator on the local network. The [TPM-sealed Wi-Fi and
+desktop wizard](tools/halo-e2e/WIZARD-TEST.md) and [signed model
+catalog](tools/halo-e2e/MODEL-CATALOG.md) are opt-in previews with hardware
+acceptance pending. AMD signing and real-coordinator onboarding remain
+integration work.
 
 ## Boot layout and the 110 MB EFI budget
 
@@ -59,7 +60,7 @@ payload plus that margin needs approximately **42.31 MB**, within the budget.
 These figures cover one demo version in addition to the existing factory boot
 files. Retaining multiple versions consumes additional ESP space.
 
-The following larger files stay on the main partition under
+In the measured pinned-model demo, the following larger files stay on the main partition under
 `/var/lib/darkbloom-text-nodeos/<id>/` and do not consume the EFI budget:
 
 | Main-partition file | Measured size |
