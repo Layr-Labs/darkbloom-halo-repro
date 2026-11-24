@@ -7,6 +7,27 @@ Radeon GPU, and decrypt the response with a verified receipt.
 **Follow [RUNBOOK.md](RUNBOOK.md)** for device setup, key enrollment, builds,
 the two-boot attestation/approval sequence, a text request, and cleanup.
 
+## Target owner setup and boot experience
+
+The intended product starts with a Darkbloom setup wizard in the factory AMD OS.
+It pairs the owner's account, checks hardware and storage, provisions network
+and service credentials, installs approved signed boot files in the small EFI
+space and verified OS/model images on the main partition, then queues a one-time
+Darkbloom boot and reboots automatically. That OS establishes its own Ethernet
+or provisioned Wi-Fi internet connection and authenticates to the real Darkbloom
+coordinator over TLS. It receives
+prompts only after fresh TPM attestation matches an approved release. On later
+power-ons, the factory boot manager offers AMD OS and Darkbloom OS as choices.
+
+This is a target experience, not an implemented GUI or production deployment.
+The current [runbook](RUNBOOK.md) uses manual MOK enrollment and installation
+with a mock coordinator. Today the UKI embeds device-specific storage pins and
+the root image contains Wi-Fi and provider configuration. An automatic setup
+would need an AMD-trusted boot component that verifies Darkbloom-signed releases,
+or an equivalent vendor-supported signing process, plus separately authenticated,
+bounded device configuration. The wizard, persistent OS menu and real-coordinator
+enrollment/admission still require implementation.
+
 ## Boot layout and the 110 MB EFI budget
 
 The demo keeps a small signed boot payload on the EFI System Partition (ESP).
