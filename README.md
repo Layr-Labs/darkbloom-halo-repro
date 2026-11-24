@@ -7,6 +7,59 @@ Radeon GPU, and decrypt the response with a verified receipt.
 **Follow [RUNBOOK.md](RUNBOOK.md)** for device setup, key enrollment, builds,
 the two-boot attestation/approval sequence, a text request, and cleanup.
 
+## Boot layout and the 110 MB EFI budget
+
+The demo keeps a small signed boot payload on the EFI System Partition (ESP).
+The large OS/runtime and model images live on the main Linux Btrfs partition.
+The signed boot payload starts Darkbloom's OS directly and verifies those images
+before using their contents.
+
+```mermaid
+flowchart TD
+    UEFI[UEFI Secure Boot] --> SHIM[Factory shim on EFI partition]
+    SHIM --> UKI[MOK-signed UKI on EFI partition: Linux kernel and initramfs]
+    UKI --> VERIFY[Initramfs reads main Btrfs partition and opens dm-verity images]
+    VERIFY --> NODE[Darkbloom Node OS and GPU inference]
+```
+
+Measured EFI files from the demo's sealed boot:
+
+| EFI component | Bytes | MB (decimal) |
+| --- | ---: | ---: |
+| Signed UKI, including kernel and initramfs | 23,625,712 | 23.626 |
+| Factory shim | 1,036,152 | 1.036 |
+| MokManager enrollment utility | 873,904 | 0.874 |
+| **Total per installed demo version** | **25,535,768** | **25.536** |
+
+Taking the discussed **110 MB as the space budget available for Darkbloom's
+boot files (110,000,000 bytes)**, this leaves approximately **84.46 MB**.
+The installer also requires a **16 MiB free-space margin**; the
+payload plus that margin needs approximately **42.31 MB**, within the budget.
+These figures cover one demo version in addition to the existing factory boot
+files. Retaining multiple versions consumes additional ESP space.
+
+The following larger files stay on the main partition under
+`/var/lib/darkbloom-text-nodeos/<id>/` and do not consume the EFI budget:
+
+| Main-partition file | Measured size |
+| --- | ---: |
+| `root.erofs` — OS, ROCm and inference runtime | 9.394 GB |
+| `models.erofs` — model image | 18.557 GB |
+| `root.verity` — OS verification tree | 73.982 MB |
+| `models.verity` — model verification tree | 146.133 MB |
+
+The UKI embeds the partition identifiers, image paths and dm-verity root hashes
+in its signed command line. Its initramfs mounts the selected Btrfs filesystem
+read-only, opens the verified images and starts Node OS with a RAM overlay.
+The coordinator checks the resulting TPM boot measurements against the approved
+release. Sharing the owner's disk partition provides storage; the owner's normal
+Linux OS is not running during this boot.
+
+Sizes are a measured example, not a maximum for future builds. The
+[installer](nodeos/text/install.sh) checks actual free ESP space before writing;
+the [image build](nodeos/text/build.sh) and [initramfs](nodeos/text/init) implement
+the layout above.
+
 ## Requirements
 
 - A Ryzen AI Halo with Pluton TPM, Secure Boot enabled, a monitor and keyboard
