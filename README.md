@@ -60,6 +60,34 @@ Sizes are a measured example, not a maximum for future builds. The
 the [image build](nodeos/text/build.sh) and [initramfs](nodeos/text/init) implement
 the layout above.
 
+## Proposed AMD-signed deployment
+
+AMD signing could remove manual MOK enrollment **only if** the signing key is
+already trusted by the factory shim or UEFI firmware. With the factory shim:
+
+```mermaid
+flowchart LR
+    UEFI[UEFI Secure Boot] --> SHIM[Factory shim]
+    SHIM --> UKI[AMD-signed UKI]
+    UKI --> VERITY[dm-verity OS and model images on main partition]
+    VERITY --> TPM[TPM attestation against approved release]
+    TPM --> JOBS[Encrypted jobs]
+```
+
+If firmware trusts the key in its `db`, it could load the UKI directly without
+shim. That changes the measured PCR 4 boot chain and skips shim's MOK
+measurements in PCR 14; the release builder and verifier would need a matching
+profile.
+
+This path is an integration proposal, not an implemented or tested mode. The
+current bootstrap and installer require MOK, and the bundle installer verifies
+its deployment manifest with the same boot certificate. AMD would need to sign
+each changed or device-specific UKI. For installation, AMD must also sign its
+deployment manifest or we must provision a separate trusted deployment key. The
+fixed certificate checks, TPM reference measurements and coordinator release policy must then be
+updated for the new chain. A boot signature authorizes boot; a separately
+approved coordinator release authorizes jobs.
+
 ## Requirements
 
 - A Ryzen AI Halo with Pluton TPM, Secure Boot enabled, a monitor and keyboard
