@@ -34,8 +34,14 @@ verity() {
 case "${1:-}" in
 prepare)
     TEXT_WORKFLOW=${TEXT_WORKFLOW:-$PROFILE/workflow.json}
+    WIFI_MODE=${WIFI_MODE:-embedded}
+    case "$WIFI_MODE" in
+        embedded) : "${WIFI_PROFILE:?private .nmconnection file prepared by administrator}" ;;
+        tpm-sealed) [[ -z ${WIFI_PROFILE:-} ]] || die 'WIFI_PROFILE is forbidden in tpm-sealed mode' ;;
+        *) die 'WIFI_MODE must be embedded or tpm-sealed' ;;
+    esac
     : "${AGENT:?compatible Linux x86_64 dbnode binary}" "${COORDINATOR:?wss coordinator URL}" \
-      "${CA_CERT:?coordinator CA PEM}" "${WIFI_PROFILE:?private .nmconnection file prepared by administrator}" \
+      "${CA_CERT:?coordinator CA PEM}" \
       "${PAIRING_TOKEN_FILE:?private pairing-token file}" "${TEXT_MODEL:?one GGUF file}" \
       "${TEXT_MODEL_ID:?model identifier}" "${TEXT_WORKFLOW:?approved text workflow JSON}" \
       "${SYSTEMD_CORE:?reviewed confidentiality-compatible libsystemd-core-257.so}" \
@@ -46,7 +52,9 @@ prepare)
     SYSTEMD_EXECUTOR=${SYSTEMD_EXECUTOR:-$(dirname "$SYSTEMD_CORE")/systemd-executor}
     [[ $COORDINATOR =~ ^wss://[A-Za-z0-9.:-]+/v1/provider/ws$ ]] || die 'Only a named/direct-LAN wss:// coordinator is accepted'
     [[ $TEXT_MODEL_ID =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] || die 'Invalid text model ID'
-    for file in "$AGENT" "$CA_CERT" "$WIFI_PROFILE" "$PAIRING_TOKEN_FILE" "$TEXT_MODEL" "$TEXT_WORKFLOW" "$SYSTEMD_CORE" "$SYSTEMD_CORE.sha256" "$SYSTEMD_EXECUTOR" "$SYSTEMD_EXECUTOR.sha256"; do test -s "$file" || die "Missing input: $file"; done
+    for file in "$AGENT" "$CA_CERT" "$PAIRING_TOKEN_FILE" "$TEXT_MODEL" "$TEXT_WORKFLOW" "$SYSTEMD_CORE" "$SYSTEMD_CORE.sha256" "$SYSTEMD_EXECUTOR" "$SYSTEMD_EXECUTOR.sha256"; do test -s "$file" || die "Missing input: $file"; done
+    [[ $WIFI_MODE != embedded ]] || test -s "$WIFI_PROFILE" || die 'Missing private Wi-Fi profile'
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$TEXT_WORKFLOW"
     TEXT_MAX_TOKENS=${TEXT_MAX_TOKENS:-1024}
     TEXT_CONTEXT_SIZE=${TEXT_CONTEXT_SIZE:-4096}
     TEXT_GPU_LAYERS=${TEXT_GPU_LAYERS:-99}
@@ -86,6 +94,9 @@ PY
     install -m 0755 "$SYSTEMD_EXECUTOR" "$B/systemd/systemd-executor"
     cp -a "$PROJECT/nodeos/rootfs" "$WORK/nodeos/rootfs"
     cp -a "$PROFILE/rootfs" "$WORK/nodeos/text/rootfs"
+    # Checked-out source directories need to be traversable by the appliance
+    # service users. This only changes staged public source, outside build/secrets.
+    find "$WORK/nodeos/rootfs" "$WORK/nodeos/text/rootfs" -type d -exec chmod 0755 {} +
     # Public apt trust inputs must be readable by apt's unprivileged verifier;
     # the surrounding private build context still stays mode 0700.
     chmod 0755 "$B/apt" "$B/keyrings"
@@ -118,7 +129,8 @@ for name in names:
 PY
     mkdir -p "$B/secrets/usr/share/darkbloom"
     install -m 0600 "$PAIRING_TOKEN_FILE" "$B/secrets/usr/share/darkbloom/pairing-token"
-    python3 - "$WIFI_PROFILE" "$B/secrets/etc/NetworkManager/system-connections/nodeos.nmconnection" "$TEXT_WORKFLOW" <<'PY'
+    if [[ $WIFI_MODE == embedded ]]; then
+        python3 - "$WIFI_PROFILE" "$B/secrets/etc/NetworkManager/system-connections/nodeos.nmconnection" "$TEXT_WORKFLOW" <<'PY'
 import configparser, json, pathlib, sys
 source, output, workflow = sys.argv[1:]
 json.loads(pathlib.Path(workflow).read_text())
@@ -135,6 +147,27 @@ if security and p[security].get('key-mgmt') in ('wpa-psk','sae'):
 with open(output, 'w') as f: p.write(f, space_around_delimiters=False)
 pathlib.Path(output).chmod(0o600)
 PY
+    else
+        # Only reviewed decryptor code enters the image. The encrypted profile
+        # is provisioned separately after the credential-free calibration boot.
+        mkdir -p "$B/generated/usr/lib/darkbloom" "$B/generated/etc/modules-load.d" "$B/generated/etc/systemd/system/darkbloom-offline-calibration.service.d"
+        install -m 0755 "$PROJECT/tools/halo-e2e/sealed-wifi-unseal.py" "$B/generated/usr/lib/darkbloom/sealed-wifi-unseal.py"
+        install -m 0644 "$PROJECT/tools/halo-e2e/sealed-wifi.py" "$B/generated/usr/lib/darkbloom/sealed-wifi.py"
+        install -m 0644 "$PROJECT/tools/tpm/collect_quote.py" "$B/generated/usr/lib/darkbloom/collect_quote.py"
+        for unit in NetworkManager dbnode-engine dbnode-llama dbnode; do
+            mkdir -p "$B/generated/etc/systemd/system/$unit.service.d"
+            printf '[Unit]\nRequires=darkbloom-sealed-wifi.service\nAfter=darkbloom-sealed-wifi.service\n' >"$B/generated/etc/systemd/system/$unit.service.d/20-darkbloom-sealed-wifi.conf"
+        done
+        esp_device=$(device_get "$OUT/device.json" esp_device)
+        esp_partuuid=$(device_get "$OUT/device.json" esp_partuuid)
+        printf '[Service]\nDeviceAllow=%s rw\n' "$esp_device" >"$B/generated/etc/systemd/system/darkbloom-offline-calibration.service.d/20-device.conf"
+        printf '%s\n' vfat nls_cp437 nls_ascii >"$B/generated/etc/modules-load.d/darkbloom-calibration.conf"
+        python3 - "$esp_device" "$esp_partuuid" "$B/generated/usr/share/darkbloom/offline-calibration.json" <<'PY'
+import json, pathlib, sys
+device, partuuid, output = sys.argv[1:]
+pathlib.Path(output).write_text(json.dumps(dict(v=1,esp_device=device,esp_partuuid=partuuid),sort_keys=True,separators=(',',':'))+'\n')
+PY
+    fi
     cat >"$B/generated/usr/share/darkbloom/agent.env" <<EOF
 DB_COORDINATOR=$COORDINATOR
 DB_TEXT_MODEL_ID=$TEXT_MODEL_ID
@@ -156,10 +189,10 @@ EOF
     find "$B/generated" -type f -exec chmod 0644 {} +
     chmod 0700 "$B/secrets/etc/NetworkManager/system-connections"
     chmod 0755 "$B/modules"
-    python3 - "$OUT/build-inputs.json" "$TEXT_MODEL" "$actual_model" "$TEXT_MODEL_ID" "$LLAMA_VERSION" "$GGML_VERSION" "$KVER" "$RETURN_AFTER" "$MICROCODE_VERSION" "$B/generated/usr/share/darkbloom/amdtee-firmware.json" "$SYSTEMD_CORE_SHA256" "$SYSTEMD_PACKAGE_VERSION" "$SYSTEMD_EXECUTOR_SHA256" "$DEVICE_CONFIG_SHA256" <<'PY'
+    python3 - "$OUT/build-inputs.json" "$TEXT_MODEL" "$actual_model" "$TEXT_MODEL_ID" "$LLAMA_VERSION" "$GGML_VERSION" "$KVER" "$RETURN_AFTER" "$MICROCODE_VERSION" "$B/generated/usr/share/darkbloom/amdtee-firmware.json" "$SYSTEMD_CORE_SHA256" "$SYSTEMD_PACKAGE_VERSION" "$SYSTEMD_EXECUTOR_SHA256" "$DEVICE_CONFIG_SHA256" "$WIFI_MODE" <<'PY'
 import json, pathlib, sys
-out, model, digest, model_id, llama, ggml, kernel, return_after, microcode, firmware, systemd_core, systemd_package, systemd_executor, device_config = sys.argv[1:]
-pathlib.Path(out).write_text(json.dumps(dict(profile='text-uki',model_source=str(pathlib.Path(model).resolve()),model_sha256=digest,model_id=model_id,llama_version=llama,ggml_version=ggml,kernel=kernel,return_after=return_after,microcode_version=microcode,amdtee_firmware=json.loads(pathlib.Path(firmware).read_text()),systemd_core_sha256=systemd_core,systemd_package_version=systemd_package,systemd_executor_sha256=systemd_executor,device_config_sha256=device_config),indent=2)+'\n')
+out, model, digest, model_id, llama, ggml, kernel, return_after, microcode, firmware, systemd_core, systemd_package, systemd_executor, device_config, wifi_mode = sys.argv[1:]
+pathlib.Path(out).write_text(json.dumps(dict(profile='text-uki',model_source=str(pathlib.Path(model).resolve()),model_sha256=digest,model_id=model_id,llama_version=llama,ggml_version=ggml,kernel=kernel,return_after=return_after,microcode_version=microcode,amdtee_firmware=json.loads(pathlib.Path(firmware).read_text()),systemd_core_sha256=systemd_core,systemd_package_version=systemd_package,systemd_executor_sha256=systemd_executor,device_config_sha256=device_config,wifi_mode=wifi_mode),indent=2)+'\n')
 PY
     printf 'out/\nmodels-stage/\n*.log\n' >"$WORK/.containerignore"
     echo 'Text inputs staged privately; no Tailscale identity or external debug channel included'
@@ -171,7 +204,9 @@ rootfs)
     MICROCODE_VERSION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["microcode_version"])' "$OUT/build-inputs.json")
     SYSTEMD_CORE_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["systemd_core_sha256"])' "$OUT/build-inputs.json")
     SYSTEMD_EXECUTOR_SHA256=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["systemd_executor_sha256"])' "$OUT/build-inputs.json")
-    podman build -t "$ROOTFS" --build-arg LLAMA_VERSION="$LLAMA_VERSION" --build-arg GGML_VERSION="$GGML_VERSION" --build-arg MICROCODE_VERSION="$MICROCODE_VERSION" --build-arg SYSTEMD_CORE_SHA256="$SYSTEMD_CORE_SHA256" --build-arg SYSTEMD_EXECUTOR_SHA256="$SYSTEMD_EXECUTOR_SHA256" -f "$PROFILE/Containerfile" "$WORK"
+    WIFI_MODE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("wifi_mode","embedded"))' "$OUT/build-inputs.json")
+    [[ $WIFI_MODE == embedded || $WIFI_MODE == tpm-sealed ]] || die 'Invalid prepared Wi-Fi mode'
+    podman build -t "$ROOTFS" --build-arg LLAMA_VERSION="$LLAMA_VERSION" --build-arg GGML_VERSION="$GGML_VERSION" --build-arg MICROCODE_VERSION="$MICROCODE_VERSION" --build-arg SYSTEMD_CORE_SHA256="$SYSTEMD_CORE_SHA256" --build-arg SYSTEMD_EXECUTOR_SHA256="$SYSTEMD_EXECUTOR_SHA256" --build-arg WIFI_MODE="$WIFI_MODE" -f "$PROFILE/Containerfile" "$WORK"
     podman run --rm --network=none --user=dbnode "$ROOTFS" /bin/sh -eu -c '
         test -x /usr/lib/darkbloom/dbnode
         test -r /usr/share/darkbloom/coordinator-ca.pem
@@ -226,8 +261,15 @@ options)
     [[ $(sha256sum "$OUT/device.json" | cut -d' ' -f1) == "$expected_config" ]] || die 'Prepared device configuration changed'
     HOST_PARTUUID=$(device_get "$OUT/device.json" host_partuuid)
     HOST_ROOT_UUID=$(device_get "$OUT/device.json" host_root_uuid)
+    WIFI_MODE=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("wifi_mode","embedded"))' "$OUT/build-inputs.json")
+    ESP_OPTION=
+    if [[ $WIFI_MODE == tpm-sealed ]]; then
+        ESP_OPTION=" nodeos.esp-partuuid=$(device_get "$OUT/device.json" esp_partuuid)"
+    elif [[ $WIFI_MODE != embedded ]]; then
+        die 'Invalid prepared Wi-Fi mode'
+    fi
     D=/var/lib/darkbloom-text-nodeos/$ID
-    printf '%s\n' "nodeos.host-partuuid=$HOST_PARTUUID nodeos.host-uuid=$HOST_ROOT_UUID nodeos.root=$D/root.erofs nodeos.roottree=$D/root.verity roothash=$(cat "$OUT/root.roothash") nodeos.models=$D/models.erofs nodeos.modelstree=$D/models.verity nodeos.modelshash=$(cat "$OUT/models.roothash") rdinit=/init lockdown=confidentiality debugfs=off iommu.strict=1 module.sig_enforce=1 init_on_free=1 slab_nomerge page_alloc.shuffle=1 randomize_kstack_offset=on vsyscall=none systemd.gpt_auto=0 rd.systemd.gpt_auto=0 panic=10 quiet loglevel=4" >"$OUT/options"
+    printf '%s\n' "nodeos.host-partuuid=$HOST_PARTUUID nodeos.host-uuid=$HOST_ROOT_UUID$ESP_OPTION nodeos.root=$D/root.erofs nodeos.roottree=$D/root.verity roothash=$(cat "$OUT/root.roothash") nodeos.models=$D/models.erofs nodeos.modelstree=$D/models.verity nodeos.modelshash=$(cat "$OUT/models.roothash") rdinit=/init lockdown=confidentiality debugfs=off iommu.strict=1 module.sig_enforce=1 init_on_free=1 slab_nomerge page_alloc.shuffle=1 randomize_kstack_offset=on vsyscall=none systemd.gpt_auto=0 rd.systemd.gpt_auto=0 panic=10 quiet loglevel=4" >"$OUT/options"
     printf '%s\n' "$ID" >"$OUT/install-id"
     cat "$OUT/options"
     ;;

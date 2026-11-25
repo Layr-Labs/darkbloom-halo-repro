@@ -6,11 +6,11 @@ pages when the runbook calls for them.
 
 Read boot, disk and network identifiers from the target Halo. Keep keys,
 Wi-Fi credentials, tokens, prompts and TPM captures out of Git and chat.
-MOK enrollment and firmware selection happen at the Halo console. Use the
+MOK enrollment and desktop wizard acceptance happen at the Halo console. Use the
 runbook's reviewed root bootstrap and fixed boot commands for privileged
 steps.
 
-The demo is complete when AMD Linux is still the default, Darkbloom boots from
-the firmware picker, and the mock coordinator path returns an independently
-verified receipt for a synthetic text prompt. Record which checkpoints you
-observed on hardware.
+The demo is complete when the chosen boot path starts Darkbloom, the mock
+coordinator test returns an independently verified receipt for a synthetic
+text prompt, and AMD Linux remains the default. Record the path and
+checkpoints you observed on hardware.

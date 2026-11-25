@@ -4,11 +4,12 @@ Boot a signed inference appliance on your Halo, verify it from a mock coordinato
 on a Mac using AMD Pluton TPM evidence, send an encrypted text prompt to the
 Radeon GPU, and decrypt the response with a verified receipt.
 
-**Start with the [fresh Halo setup guide](RUNBOOK.md)** to enroll a boot key,
-run encrypted inference through a Mac mock coordinator, and add Darkbloom
-to the firmware boot picker with AMD Linux as the default. The guide follows
-the reference lab's one-time shim boot before testing the firmware picker
-on the new unit.
+**Start with the [fresh Halo runbook](RUNBOOK.md)** to build and sign the image
+and set up the Mac mock coordinator. The [Wi-Fi wizard test](tools/halo-e2e/WIZARD-TEST.md)
+reproduces the reference Halo's offline calibration, TPM-sealed Wi-Fi setup,
+automatic first boot, and verified inference. It adds both OS choices to the
+factory systemd-boot menu with AMD Linux as the default. The runbook also
+provides the direct shim path and a firmware picker test.
 
 ## Boot layout and the 110 MB EFI budget
 
@@ -20,7 +21,9 @@ before using their contents.
 ```mermaid
 flowchart TD
     UEFI[UEFI Secure Boot] --> SHIM[Factory shim on EFI partition]
-    SHIM --> UKI[MOK-signed UKI on EFI partition: Linux kernel and initramfs]
+    SHIM -->|Wizard| MENU[Factory systemd-boot]
+    MENU --> UKI[MOK-signed UKI on EFI partition]
+    SHIM -->|Direct shim| UKI
     UKI --> VERIFY[Initramfs reads main Btrfs partition and opens dm-verity images]
     VERIFY --> NODE[Darkbloom Node OS and GPU inference]
 ```
@@ -46,9 +49,9 @@ These larger files stay on the main partition under
 
 | Main-partition file | Measured size |
 | --- | ---: |
-| `root.erofs` — OS, ROCm and inference runtime | 9.394 GB |
+| `root.erofs` — OS, ROCm and inference runtime | 9.404 GB |
 | `models.erofs` — model image | 18.557 GB |
-| `root.verity` — OS verification tree | 73.982 MB |
+| `root.verity` — OS verification tree | 74.064 MB |
 | `models.verity` — model verification tree | 146.133 MB |
 
 The UKI embeds the partition identifiers, image paths and dm-verity root hashes
@@ -66,6 +69,8 @@ writing. The [image build](nodeos/text/build.sh) and
 
 - A Ryzen AI Halo with Pluton TPM, Secure Boot enabled, a monitor and keyboard
   for MOK enrollment, and an ordinary Linux account with initial sudo access.
+- The Wi-Fi wizard uses the factory systemd-boot menu, a system-saved WPA2/WPA3
+  Personal profile, and the Halo packages listed in runbook section 0.
 - The reference software profile: RAH-002 / Ryzen AI Max+ PRO 495 / gfx1151,
   vendor Rex kernel `7.2.7+rex-amd64`, Debian systemd `257.13-1~deb13u1`,
   the vendor RyAI package feeds, and rootless Podman on the Halo.

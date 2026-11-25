@@ -2,23 +2,31 @@
 
 Run the commands labelled **Mac** on the trusted coordinator/signing machine and
 those labelled **Halo** in its normal Linux OS as the ordinary owner account.
-Use a fresh copy of this repository at the same commit on both machines.
+Use a fresh checkout on both machines and compare `git rev-parse HEAD`.
+Use the ordinary source checkout permissions from `umask 022`; the commands
+below create separate private directories for keys, models and images.
 Start with the [prerequisites](README.md#requirements).
 
-Sections 1–5 reproduce the one-time signed boot and verified encrypted text
-request completed on the reference Halo. Section 6 adds the same Darkbloom
-shim entry to the firmware boot picker, leaves AMD Linux as the default, and
-checks inference again. The firmware-picker path still needs a physical run.
+Start with sections 0–3. Choose the path you want to test in section 0.
 
-Use synthetic prompts and a dedicated lab Wi-Fi profile. For WPA2/WPA3 Personal,
-use a system-saved NetworkManager connection with its password in the keyfile
-so the appliance can connect without a desktop keyring. This reference build
-includes that Wi-Fi keyfile in its private image. The serving kernel and GPU
-stack remain trusted.
+- **Wi-Fi wizard** (`tpm-sealed`) follows the
+  [wizard test](tools/halo-e2e/WIZARD-TEST.md) after signed installation. The
+  reference Halo passed offline TPM calibration, automatic first boot over
+  Wi-Fi, and encrypted inference with a verified receipt. We invoked the
+  wizard's final action over SSH. Use the desktop wizard to test the click-through.
+- **Direct shim and firmware picker** (`embedded`) continues through sections
+  3–7. The reference Halo completed the one-time signed inference demo. Section 6
+  tests the firmware picker on your unit with AMD Linux as the default.
 
-Commands below use placeholders. Keep the actual device UUIDs, LAN address,
-EK material, Wi-Fi keyfile, pairing/API tokens, captured event logs, keys,
-prompts, and outputs outside this repository. `nodeos/text/README.md` and the
+Use synthetic prompts and a dedicated WPA2/WPA3 Personal lab Wi-Fi profile
+saved system-wide by NetworkManager. The direct shim path stores the profile
+in its private image. The wizard seals its copy to the measured Darkbloom
+boot on the Halo. The serving kernel and GPU stack remain trusted.
+
+Commands below use placeholders. Keep actual device UUIDs, LAN addresses,
+EK material, Wi-Fi keyfiles, pairing/API tokens, event logs, signing keys,
+prompts, and outputs in private storage or the ignored `.halo-e2e/` directory.
+Keep them out of commits. `nodeos/text/README.md` and the
 linked tools define the current accepted input formats. Run every rootless
 build command as the ordinary Halo user, and use the fixed root controller
 only for the listed install/boot/cleanup operations.
@@ -29,42 +37,63 @@ only for the listed install/boot/cleanup operations.
    updates, then reboot into AMD Linux.
 2. Join the Halo and Mac to the same reachable lab Wi-Fi network. Use the
    **Remote Access** page in AMD Ryzen AI Developer Center to find the Halo's
-   address and owner account. Check SSH from the Mac. This demo can run entirely
-   over Wi-Fi.
-3. Check the reference software and disk layout. Take the factory boot baseline
-   in step 1 after all pending factory updates have finished.
+   address and owner account. On a first SSH connection, compare the host
+   fingerprint with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the
+   Halo console. This demo can run entirely over Wi-Fi.
+3. For the Wi-Fi wizard, install the Halo prerequisites below in AMD Linux.
+   Finish package configuration and reboot back into AMD Linux before taking
+   the factory boot baseline in section 1.
 
 See the [AMD Ryzen AI Halo User Guide](https://developer.amd.com/playbooks/user-guide/).
 
 ```bash
+# Halo, for the Wi-Fi wizard
+sudo apt-get update
+sudo apt-get install --no-install-recommends tpm2-tools python3-cryptography zenity
+```
+
+```bash
+# Halo
 uname -r
+dpkg --audit
 dpkg-query -W systemd libsystemd-shared llama.cpp-tools libggml0-backend-hip amd64-microcode
+test -r "/boot/vmlinuz-$(uname -r)"
+test -d "/usr/lib/modules/$(uname -r)"
 sudo mokutil --sb-state
 ls -l /dev/tpmrm0
 findmnt -no SOURCE,FSTYPE,FSROOT -T /var/lib
-df -h /
+df -h "$HOME" /var/lib
 podman info --format '{{.Host.Security.Rootless}}'
 ```
 
 The reference used RAH-002, vendor kernel `7.2.7+rex-amd64`, systemd
 `257.13-1~deb13u1`, Secure Boot, Pluton TPM, rootless Podman and Btrfs
-top-level subvolume 5. See [requirements](README.md#requirements). If the
+top-level subvolume 5. Check that `dpkg --audit` reports no pending package
+configuration and the `/var/lib` check reports Btrfs with `FSROOT` set to `/`.
+See [requirements](README.md#requirements). If the
 installed systemd ABI or storage layout differs, have the matching build and
 device configuration reviewed before continuing.
 
 Use private paths such as these from the respective checkout roots. Transfer
 the actual values directly between the two machines and keep them out of Git.
+After a Halo reboot, return to the checkout and rerun the Halo variable block
+with the same values. Repeat the Mac block when opening its second terminal.
 
 ```bash
 # Mac, from this repository root:
 umask 077
 export HALO_SSH="OWNER@HALO_ADDRESS"
+export OWNER_USER="HALO_OWNER_ACCOUNT"
 export MAC_LAN_IPV4="MAC_LAN_ADDRESS"
 export NEW_INSTALL_ID=text-demo-001
 export MAC_PRIVATE="$PWD/.halo-e2e/repro-state"
 export PRIVATE_BOOTSTRAP_STAGE="$MAC_PRIVATE/bootstrap"
+export HALO_STAGE="/home/$OWNER_USER/darkbloom-text-repro"
 mkdir -p "$PRIVATE_BOOTSTRAP_STAGE"
 chmod 0700 "$MAC_PRIVATE" "$PRIVATE_BOOTSTRAP_STAGE"
+ssh "$HALO_SSH" hostname
+rustc --version
+docker info --format '{{.ServerVersion}}'
 ```
 
 ```bash
@@ -79,6 +108,8 @@ export OWNER_USER=$(id -un)
 export PRIVATE_HALO_STAGE="$HOME/darkbloom-text-repro"
 export PRIVATE_HALO_MODEL="$PRIVATE_HALO_STAGE/model"
 export HALO_STAGING="/home/$OWNER_USER/darkbloom-text-e2e-staging"
+export NODEOS_TEXT_WORK="$PRIVATE_HALO_STAGE/image-work"
+export WIFI_MODE=tpm-sealed   # Set embedded here for the direct shim path.
 install -d -m 0700 "$PRIVATE_HALO_STAGE" "$PRIVATE_HALO_MODEL" "$HALO_STAGING"
 ```
 
@@ -106,8 +137,19 @@ Copy the public values into the Mac shell: `HALO_HOSTNAME`, `OWNER_USER`,
 `HOST_PARTUUID` and `HOST_ROOT_UUID` for the root Btrfs partition;
 `ESP_MOUNT`, `ESP_DEVICE`, `ESP_DISK`, `ESP_PARTITION` and `ESP_PARTUUID`
 for the mounted EFI partition; `FACTORY_EFI_DIR` and `FACTORY_BOOT_LABEL`
-from its shim boot entry; and `WIFI_IFACE` for the connected wireless device.
+from its shim boot entry, using a path such as `EFI/<vendor>` for
+`FACTORY_EFI_DIR`; and `WIFI_IFACE` for the connected wireless device.
 The factory EFI directory must contain `shimx64.efi` and `mmx64.efi`.
+Use the following commands on the Halo after setting `ESP_DEVICE` and
+`ESP_MOUNT`. Allow room for the new UKI, shim and MokManager plus the
+installer's 16 MiB free-space margin.
+
+```bash
+esp_node=$(basename "$(readlink -f "$ESP_DEVICE")")
+cat "/sys/class/block/$esp_node/partition"  # ESP_PARTITION
+df -Pk "$ESP_MOUNT"
+```
+
 Confirm the factory AMD Linux entry is first in `BootOrder`. Record that
 order before any Darkbloom install.
 
@@ -138,6 +180,7 @@ sudo reboot
 At the Halo console, choose **Enroll MOK**, continue, confirm with the
 enrollment password just set, and choose **Reboot**. Back in AMD Linux, run
 `sudo mokutil --test-key "$HOME/boot-cert.der"` and `mokutil --sb-state`.
+Run `sudo efibootmgr -v` again and check that AMD Linux remains first.
 Continue after the key is enrolled and Secure Boot is enabled. Keep the private
 key on the Mac. Review and pin the certificate's DER SHA-256 in the signer
 and root bootstrap before
@@ -189,7 +232,7 @@ Never transfer the boot or release signing private keys to the Halo.
 | --- | --- |
 | Mac → Halo | `inputs/device.json` → `$PRIVATE_HALO_STAGE/device.json`; bootstrap archive → owner's home |
 | Mac → Halo | `.halo-e2e/tls/ca.pem` → `$PRIVATE_HALO_STAGE/ca.pem`; `.halo-e2e/provider-token` → `$PRIVATE_HALO_STAGE/pairing-token` |
-| Halo → Mac | `.work/out/unsigned.efi` → `$UNSIGNED_EFI`; factory `shimx64.efi` → `$REVIEWED_FACTORY_SHIM` |
+| Halo → Mac | `$NODEOS_TEXT_WORK/out/unsigned.efi` → `$UNSIGNED_EFI`; factory `shimx64.efi` → `$REVIEWED_FACTORY_SHIM` |
 | Mac → Halo | Signed EFI and SHA-256 file → `$SIGNED_EFI` and `$SIGNED_EFI_SHA256` |
 | Halo → Mac → Halo | Bundle `manifest.json` → `$MAC_PRIVATE/manifest.json`; signed `manifest.sig` → `$HALO_STAGING/manifest.sig` |
 | Halo → Mac | Runtime template → `$MAC_PRIVATE/runtime-template.json` |
@@ -227,7 +270,6 @@ the Mac while keeping its firewall on.
 
 ```bash
 # Mac
-HALO_STAGE="/home/$OWNER_USER/darkbloom-text-repro"
 REVIEWED_FACTORY_SHIM="$MAC_PRIVATE/factory-shimx64.efi"
 scp "${HALO_SSH}:${HALO_STAGE}/factory-shimx64.efi" "$REVIEWED_FACTORY_SHIM"
 shasum -a 256 "$REVIEWED_FACTORY_SHIM"
@@ -242,12 +284,8 @@ the same frozen source using the rootless pinned Rust/Alpine image. The
 dependencies into a private ordinary-user cache, then builds offline with
 container networking disabled. It emits SHA-256 records for both outputs.
 Copy the Mac TLS CA to the Halo's
-private staging area, and prepare
-a private provider pairing-token file containing the token from
-`.halo-e2e/provider-token`. The fixed root helper's `wifi-profile` operation
-can write the active profile **directly** to a private mode-0600 file; never
-print that operation's output. Prepare one approved GGUF model and the fixed
-`nodeos/text/workflow.json`.
+private staging area with the private provider pairing-token file from the
+Mac. Prepare one approved GGUF model and the fixed `nodeos/text/workflow.json`.
 
 ```bash
 # Halo ordinary user, after the fixed root bootstrap has been installed:
@@ -256,10 +294,18 @@ install -d -m 0700 "$PRIVATE_HALO_STAGE"
 chmod 0600 "$PRIVATE_HALO_STAGE/pairing-token"
 curl --fail --silent --show-error --cacert "$PRIVATE_HALO_STAGE/ca.pem" \
   "https://${MAC_LAN_IPV4}:8790/v1/coordinator" >/dev/null
-sudo /usr/local/sbin/darkbloom-text-e2e-control wifi-profile \
-  >"$PRIVATE_HALO_STAGE/nodeos.nmconnection"
-chmod 0600 "$PRIVATE_HALO_STAGE/nodeos.nmconnection"
+case "$WIFI_MODE" in
+  tpm-sealed) unset WIFI_PROFILE ;;
+  embedded)
+    export WIFI_PROFILE="$PRIVATE_HALO_STAGE/nodeos.nmconnection"
+    sudo /usr/local/sbin/darkbloom-text-e2e-control wifi-profile >"$WIFI_PROFILE"
+    chmod 0600 "$WIFI_PROFILE"
+    ;;
+esac
 ```
+
+For the Wi-Fi wizard, leave `WIFI_PROFILE` unset throughout the build. For the
+direct shim path, keep the exported keyfile in the private Halo directory.
 
 For the recorded model, obtain the public
 [Unsloth Qwen3-Coder GGUF revision](https://huggingface.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF/tree/b17cb02dd882d5b6ab62fc777ad2995f19668350)
@@ -293,10 +339,10 @@ export AGENT="$PRIVATE_HALO_STAGE/rust-build/target/release/dbnode"
 export HALO_DBRELEASE="$PRIVATE_HALO_STAGE/rust-build/target/release/dbrelease"
 export COORDINATOR="wss://$MAC_LAN_IPV4:8790/v1/provider/ws"
 export CA_CERT="$PRIVATE_HALO_STAGE/ca.pem"
-export WIFI_PROFILE="$PRIVATE_HALO_STAGE/nodeos.nmconnection"
 export PAIRING_TOKEN_FILE="$PRIVATE_HALO_STAGE/pairing-token"
 export TEXT_MODEL="$PRIVATE_HALO_MODEL/model.gguf"
 export TEXT_MODEL_ID=qwen3-coder-30b-a3b-instruct-q4-k-m
+if [ "$WIFI_MODE" = tpm-sealed ]; then export RETURN_AFTER=5min; fi
 bash nodeos/text/scripts/build-patched-systemd-core.sh "$PRIVATE_HALO_STAGE/systemd-build"
 bash nodeos/text/scripts/test-patched-systemd-core.sh "$PRIVATE_HALO_STAGE/systemd-build/artifacts/libsystemd-core-257.so"
 export SYSTEMD_CORE="$PRIVATE_HALO_STAGE/systemd-build/artifacts/libsystemd-core-257.so"
@@ -311,7 +357,7 @@ bash nodeos/text/build.sh uki
 
 `ID` and the bundle sequence must be new and monotonic. The builder requires
 an explicit, reviewed device configuration and pins the factory kernel and
-package versions; do not transplant a prior image. Review `.work/out/options`, the root and
+package versions; do not transplant a prior image. Review `$NODEOS_TEXT_WORK/out/options`, the root and
 model hashes, image contents, `build-inputs.json`, and the unsigned UKI
 sections before signing. The initrd checker must find the signed SHA-384
 module and narrow early loader. Debug, external journal export, and free-form
@@ -319,7 +365,7 @@ agent arguments are rejected by the text profile.
 
 ## 3. Sign, install, and take a calibration capture
 
-Transfer only `.work/out/unsigned.efi` to the Mac signer. Sign with the
+Transfer `$NODEOS_TEXT_WORK/out/unsigned.efi` to the Mac signer. Sign with the
 enrolled private key in its isolated, pinned signer environment, verify the
 signature against the pinned public certificate, and return `signed.efi`
 plus `signed.efi.sha256` to the Halo staging `out/`. The signer refuses an
@@ -328,9 +374,8 @@ to the Halo.
 
 ```bash
 # Mac only: the private boot key is mounted read-only into the signer container.
-HALO_CHECKOUT="/home/$OWNER_USER/darkbloom-halo-repro"  # use the actual checkout
 UNSIGNED_EFI="$MAC_PRIVATE/unsigned.efi"
-scp "${HALO_SSH}:${HALO_CHECKOUT}/nodeos/text/.work/out/unsigned.efi" "$UNSIGNED_EFI"
+scp "${HALO_SSH}:${HALO_STAGE}/image-work/out/unsigned.efi" "$UNSIGNED_EFI"
 ENROLLED_CERT_DER_SHA256=$(cat "$MAC_PRIVATE/new-boot-key/boot-cert.sha256")
 NEW_PRIVATE_SIGN_DIR="$MAC_PRIVATE/signed-$NEW_INSTALL_ID"
 docker pull 'debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4'
@@ -341,15 +386,14 @@ SIGNED_EFI="$NEW_PRIVATE_SIGN_DIR/signed.efi"
 scp "$SIGNED_EFI" "$NEW_PRIVATE_SIGN_DIR/signed.efi.sha256" "${HALO_SSH}:${HALO_STAGE}/"
 ```
 
-On the Halo, after uploading `signed.efi` and its hash record to private
-paths, stage exactly the eight data files. This example uses the builder's
-default private work directory; substitute `NODEOS_TEXT_WORK/out` if set:
+On the Halo, stage the eight data files after the signed UKI and its hash
+record arrive in the private directory.
 
 ```bash
 SIGNED_EFI="$PRIVATE_HALO_STAGE/signed.efi"
 SIGNED_EFI_SHA256="$PRIVATE_HALO_STAGE/signed.efi.sha256"
 install -d -m 0700 "$HALO_STAGING/out"
-cp --reflink=auto nodeos/text/.work/out/{root.erofs,root.verity,models.erofs,models.verity,payload.sha256,install-id} \
+cp --reflink=auto "$NODEOS_TEXT_WORK"/out/{root.erofs,root.verity,models.erofs,models.verity,payload.sha256,install-id} \
   "$HALO_STAGING/out/"
 install -m 0600 "$SIGNED_EFI" "$HALO_STAGING/out/signed.efi"
 install -m 0600 "$SIGNED_EFI_SHA256" "$HALO_STAGING/out/signed.efi.sha256"
@@ -377,6 +421,15 @@ without changing the factory default BootOrder.
 
 ```bash
 sudo /usr/local/sbin/darkbloom-text-e2e-control install
+```
+
+**Wi-Fi wizard.** Continue with the
+[wizard test](tools/halo-e2e/WIZARD-TEST.md) from this signed install. Its
+offline calibration and serving boot use the same systemd-boot menu entry.
+
+**Direct shim.** Continue here with the protected one-time boot.
+
+```bash
 sudo /usr/local/sbin/darkbloom-text-e2e-control boot
 ```
 
@@ -417,8 +470,19 @@ Set `REVIEWED_MIN_SCRTM` from the reviewed `EV_SCRTM_VERSION` event under
 PCR 0 in the summary. The reference RAH-002 value was `MFGB0.04.00`.
 Use the measured value from your unit in both shells.
 
+### Build the runtime template on the Halo
+
+After a reboot, restore the Halo variables from section 0 first. Use the same
+worker, model, workflow and signed image from sections 2–3.
+
 ```bash
 # Halo ordinary user, using the freshly built Linux dbrelease binary:
+AGENT="$PRIVATE_HALO_STAGE/rust-build/target/release/dbnode"
+HALO_DBRELEASE="$PRIVATE_HALO_STAGE/rust-build/target/release/dbrelease"
+FACTORY_SHIM="$PRIVATE_HALO_STAGE/factory-shimx64.efi"
+SIGNED_EFI="$PRIVATE_HALO_STAGE/signed.efi"
+TEXT_MODEL="$PRIVATE_HALO_MODEL/model.gguf"
+TEXT_MODEL_ID=qwen3-coder-30b-a3b-instruct-q4-k-m
 REVIEWED_MIN_SCRTM="REPLACE_WITH_REVIEWED_SCRTM_VALUE"
 ZERO64=$(printf '%064d' 0)  # dev template only; never a production PCR 9
 PRIVATE_RUNTIME_TEMPLATE="$PRIVATE_HALO_STAGE/runtime-template.json"
@@ -429,6 +493,8 @@ PRIVATE_RUNTIME_TEMPLATE="$PRIVATE_HALO_STAGE/runtime-template.json"
   -text-model "$TEXT_MODEL" -text-workflow nodeos/text/workflow.json \
   -out "$PRIVATE_RUNTIME_TEMPLATE"
 ```
+
+### Approve the direct shim release on the Mac
 
 ```bash
 # Mac signer, after transferring and reviewing the dev template:

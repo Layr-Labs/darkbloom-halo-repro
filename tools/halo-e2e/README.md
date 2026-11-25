@@ -111,10 +111,11 @@ The fixed helper provides these operations:
 | `disable-dual-boot` | Remove the Darkbloom entry from the boot order while preserving the installed files |
 | `cleanup` | Verify factory baseline, restore recognized fallback order, revoke this sudo grant |
 
-`wifi-profile` contains the network credential. Redirect it **directly** to a
-private 0600 file outside Git and transcripts. The Node OS builder requires
-that private file, a private pairing token, model weights, a compatible Linux
-`dbnode`, and the coordinator CA. See
+`wifi-profile` contains the network credential for the direct shim build.
+Redirect it **directly** to a private 0600 file outside Git and transcripts.
+The [Wi-Fi wizard test](WIZARD-TEST.md) provisions the saved profile on the
+Halo after offline TPM calibration. Both builds require a private pairing
+token, model weights, a compatible Linux `dbnode`, and the coordinator CA. See
 [`nodeos/text/README.md`](../../nodeos/text/README.md) for the rootless build
 and the trusted signer workflow. Keep EK certificate files out of Git as
 device identifiers.

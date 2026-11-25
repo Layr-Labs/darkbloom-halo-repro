@@ -12,8 +12,9 @@ Required inputs:
   AMD microcode package. The systemd patch requires `257.13-1~deb13u1`.
 - Rootless Podman, Python 3, OpenSSL, curl and space for the selected model,
   root images and staging copies.
-- A generated per-device `device.json`, private Wi-Fi and pairing-token files,
-  the coordinator CA, a Linux `dbnode`, and the selected GGUF.
+- A generated per-device `device.json`, a private pairing-token file, the
+  coordinator CA, a Linux `dbnode`, and the selected GGUF. The direct shim
+  build also takes a private Wi-Fi keyfile.
 - Image storage on the configured Btrfs filesystem's top-level subvolume
   (`subvolid=5`), visible at `/var/lib/darkbloom-text-nodeos` in both OSes.
   The kernel must expose the configured partition's PARTUUID in sysfs uevents.
@@ -21,12 +22,19 @@ Required inputs:
 Build with the commands in [runbook step 2](../../RUNBOOK.md#2-start-the-mac-side-mock-coordinator-and-build-the-image).
 The systemd patch requires the matched core library and adjacent executor,
 with their checksum files. The builder verifies the device configuration and
-pins the partition in the signed boot arguments. Keep inputs and image output
-private because the reference image includes its lab Wi-Fi keyfile and
-provider pairing token.
+pins the partition in the signed boot arguments. Both build modes include the
+test provider pairing token. Keep build inputs and images in private storage.
 
-Outputs are under ignored `nodeos/text/.work/out/`. Set `NODEOS_TEXT_WORK` to
-use another private absolute directory. The builder hashes the entire model.
+- `WIFI_MODE=tpm-sealed` omits the Wi-Fi profile from the image. Use the
+  [wizard test](../../tools/halo-e2e/WIZARD-TEST.md) to calibrate the measured
+  boot and seal a copy of the Halo's saved profile on the device. The serving
+  boot recovers the profile into a root-only RAM directory.
+- `WIFI_MODE=embedded` includes the lab profile specified by `WIFI_PROFILE`
+  and uses the direct shim path. This remains the builder's default.
+
+The runbook sets `NODEOS_TEXT_WORK` to a private absolute directory. Read
+outputs in its `out/` subdirectory. The default is ignored
+`nodeos/text/.work/out/`. The builder hashes the entire model.
 If supplied, `TEXT_MODEL_SHA256` must match. `RETURN_AFTER` accepts 5–120 minutes
 and defaults to 25 minutes. The text workflow uses greedy generation without
 prompt caching and accepts a generated-token limit of 1–1024.

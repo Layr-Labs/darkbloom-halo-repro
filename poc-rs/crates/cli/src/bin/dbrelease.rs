@@ -11,6 +11,7 @@
 //! dbrelease sign    -key keys/release.key -in manifest.json -out release.dsse.json
 //! dbrelease verify  -pub keys/release.pub -in release.dsse.json
 //! dbrelease inspect-log -in /sys/kernel/security/tpm0/binary_bios_measurements
+//! dbrelease verify-calibration -in quote.json -ak-public pinned-ak.json -nonce HEX -manifest reviewed.json -release-id ID
 //! ```
 
 #![forbid(unsafe_code)]
@@ -35,7 +36,7 @@ fn main() {
     db_tls::install_default_provider();
     let args = cli_args();
     let Some((cmd, rest)) = args.split_first() else {
-        fail("usage: dbrelease keygen|predict|build|sign|verify|inspect-log [flags]");
+        fail("usage: dbrelease keygen|predict|build|sign|verify|inspect-log|verify-calibration [flags]");
     };
     match cmd.as_str() {
         "keygen" => keygen(rest),
@@ -44,8 +45,41 @@ fn main() {
         "sign" => sign(rest),
         "verify" => verify(rest),
         "inspect-log" => inspect_log(rest),
+        "verify-calibration" => verify_calibration(rest),
         other => fail(format!("unknown command {other:?}")),
     }
+}
+
+fn verify_calibration(args: &[String]) {
+    use std::io::{Read as _, Write as _};
+    let mut flags = FlagSet::new("verify-calibration");
+    flags
+        .string("in", "", "offline collect_quote.py JSON capture")
+        .string("ak-public", "", "AK public JSON pinned independently in trusted factory setup")
+        .string("nonce", "", "fresh verifier-generated nonce, 16-32 bytes of hex")
+        .string("manifest", "", "independently reviewed UKI manifest including platform PCR pins")
+        .string("release-id", "", "explicit installed release identifier for the wizard PCR reference");
+    flags.parse_or_exit(args);
+    let read = |name: &str, limit: usize| {
+        let path = flags.str(name);
+        if path.is_empty() {
+            fail(format!("-{name} is required"));
+        }
+        let file = std::fs::File::open(&path).unwrap_or_else(|e| fail(format!("{path}: {e}")));
+        let mut bytes = Vec::new();
+        file.take(limit as u64 + 1).read_to_end(&mut bytes).unwrap_or_else(|e| fail(format!("{path}: {e}")));
+        if bytes.len() > limit {
+            fail(format!("{path}: exceeds {limit} byte limit"));
+        }
+        bytes
+    };
+    let capture = read("in", db_cli::calibration::MAX_CAPTURE_BYTES);
+    let pinned = read("ak-public", 4096);
+    let manifest = read("manifest", 8 << 20);
+    let manifest: Manifest = db_gojson::from_slice(&manifest).unwrap_or_else(|e| fail(format!("reviewed manifest: {e}")));
+    let nonce = hex::decode(flags.str("nonce")).unwrap_or_else(|e| fail(format!("-nonce: {e}")));
+    let canonical = db_cli::calibration::verify(&capture, &pinned, &nonce, &manifest, &flags.str("release-id")).unwrap_or_else(|e| fail(e));
+    std::io::stdout().lock().write_all(&canonical).unwrap_or_else(|e| fail(format!("stdout: {e}")));
 }
 
 fn keygen(args: &[String]) {
@@ -60,7 +94,8 @@ fn keygen(args: &[String]) {
 fn add_boot_flags(fs: &mut FlagSet) {
     fs.string("shim", "/usr/lib/shim/shimx64.efi.signed", "shim EFI binary")
         .string("sdboot", "/usr/lib/systemd/boot/efi/systemd-bootx64.efi.signed", "systemd-boot EFI binary")
-        .string("uki", "", "signed single-profile UKI (direct shim -> UKI boot)")
+        .string("uki", "", "signed single-profile UKI")
+        .boolean("uki-menu", false, "measure shim -> systemd-boot -> UKI for a boot menu entry")
         .string("kernel", "", "kernel image (EFI stub PE)")
         .string("initrd", "", "initrd image")
         .string("cmdline", "", "kernel command line (load options) exactly as booted")
@@ -100,7 +135,12 @@ fn compute_boot(fs: &FlagSet) -> BootResult {
         }
         let mut apps = Vec::new();
         let mut digests = Vec::new();
-        for (name, path, bytes) in [("shimx64.efi", fs.str("shim"), None), ("uki", uki, Some(data))] {
+        let mut boot_chain = vec![("shimx64.efi", fs.str("shim"), None)];
+        if fs.bool("uki-menu") {
+            boot_chain.push(("systemd-bootx64.efi", fs.str("sdboot"), None));
+        }
+        boot_chain.push(("uki", uki, Some(data)));
+        for (name, path, bytes) in boot_chain {
             let bytes = bytes.unwrap_or_else(|| std::fs::read(&path).unwrap_or_else(|e| fail(format!("{path}: {e}"))));
             let d = db_release::authenticode_digest(&bytes, HashAlg::Sha256).unwrap_or_else(|e| fail(format!("{path}: {e}")));
             apps.push(Artifact { name: name.to_owned(), sha256: hex::encode(&d), bytes: bytes.len() as i64 });
@@ -121,6 +161,9 @@ fn compute_boot(fs: &FlagSet) -> BootResult {
             uki_sections: Some(section_artifacts),
             path: "uki".to_owned(),
         };
+    }
+    if fs.bool("uki-menu") {
+        fail("-uki-menu requires -uki");
     }
     let mut cmdline = fs.str("cmdline");
     if fs.bool("cmdline-from-proc") {
@@ -166,7 +209,7 @@ fn predict(args: &[String]) {
     println!("initrd sha256         {}", r.pred.initrd_sha256);
     println!("load options sha256   {}", r.pred.load_options_sha256);
     let mut rows = vec![
-        (4, hex::encode(r.pcr4), if r.path == "uki" { "boot chain (shim, UKI)" } else { "boot chain (shim, systemd-boot, kernel)" }),
+        (4, hex::encode(r.pcr4), "boot chain (EFI applications listed above)"),
         (
             9,
             r.pred.pcr9_sha256.clone(),
@@ -211,7 +254,7 @@ fn explicit_flag(args: &[String], name: &str) -> bool {
             return true;
         }
         i += 1;
-        if !inline && !matches!(flag, "cmdline-from-proc" | "require-boot-health") {
+        if !inline && !matches!(flag, "cmdline-from-proc" | "require-boot-health" | "uki-menu") {
             i += 1;
         }
     }
